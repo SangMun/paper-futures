@@ -167,6 +167,45 @@ def test_상태_파일이_없으면_초기값(tmp_path):
     assert s.balance > 0
 
 
+def test_v2_상태는_잔고와_포지션을_보존해_v3로_복구한다():
+    raw = {
+        "version": 2,
+        "balance": 988.95,
+        "day_start_balance": 993.92,
+        "day_key": "2026-08-11",
+        "consecutive_losses": {"legacy": 2},
+        "paused_until": {"legacy": 123},
+        "positions": [
+            {
+                "symbol": BTC,
+                "side": "long",
+                "strategy": "legacy",
+                "entry": 60_000.0,
+                "contracts": 10,
+                "leverage": 2,
+                "stop": 59_000.0,
+                "tp1": 62_000.0,
+                "partial_ratio": 0.5,
+                "trail_atr_mult": 1.2,
+                "max_hold_bars": 40,
+                "risk_amount": 10.0,
+            }
+        ],
+        "last_bar_ts": {"BTC_USDT_1h": 123},
+    }
+
+    restored = st.BotState.from_dict(raw)
+
+    assert restored.balance == pytest.approx(988.95)
+    assert restored.day_start_balance == pytest.approx(993.92)
+    assert restored.consecutive_losses == {"legacy": 2}
+    assert restored.paused_until == {"legacy": 123}
+    assert restored.daily_entries == {}
+    assert restored.last_bar_ts == {"BTC_USDT_1h": 123}
+    assert len(restored.positions) == 1
+    assert restored.positions[0].entry_tf == "5m"
+
+
 def test_깨진_상태는_예외(tmp_path):
     """초기화로 대체하지 않는다. 열려 있던 포지션을 잊는 게 가장 위험하다."""
 

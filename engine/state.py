@@ -97,6 +97,14 @@ class BotState:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BotState":
         version = data.get("version")
+        if version == 2:
+            # v3에서 추가된 계좌 상태는 일일 전략별 진입 횟수뿐이다.
+            # v2 포지션에 없는 필드는 OpenPosition의 보수적인 기본값으로
+            # 복구할 수 있으므로, 잔고와 열린 포지션을 버리지 않고 옮긴다.
+            data = dict(data)
+            data["version"] = STATE_VERSION
+            data.setdefault("daily_entries", {})
+            version = STATE_VERSION
         if version != STATE_VERSION:
             # 형식이 바뀌면 조용히 넘어가지 않는다. 잘못 해석한 포지션으로
             # 매매를 이어가는 것보다 멈추는 편이 낫다.
