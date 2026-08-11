@@ -106,6 +106,8 @@ engine/       가상 체결, 상태 저장·복구, 메인 루프, 리플레이
 reporting/    CSV/JSONL 로그, 디스코드 알림
 tools/        수동 점검 스크립트 (실통신 확인, 과거 데이터 백필, 리플레이 CLI)
 tests/        단위·회귀 테스트
+deploy/       systemd 유닛 (봇 실행, S3 백업 타이머)
+dashboard/    성과 조회용 웹 대시보드 (Next.js)
 data/         로그·캐시 출력 (git 제외)
 ```
 

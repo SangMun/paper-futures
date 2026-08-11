@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily paper-bot runtime backup
+
+[Timer]
+# 03:10 KST, with a small random delay to avoid an exact fixed boundary.
+OnCalendar=*-*-* 18:10:00 UTC
+RandomizedDelaySec=5m
+Persistent=true
+Unit=xrp-paper-bot-backup-runtime.service
+
+[Install]
+WantedBy=timers.target

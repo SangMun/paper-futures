@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly paper-bot market-data backup
+
+[Timer]
+# Monday 03:30 KST, after the daily runtime backup window.
+OnCalendar=Sun *-*-* 18:30:00 UTC
+RandomizedDelaySec=10m
+Persistent=true
+Unit=xrp-paper-bot-backup-market.service
+
+[Install]
+WantedBy=timers.target

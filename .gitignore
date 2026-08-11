@@ -18,3 +18,15 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+
+# 대시보드 (Next.js) — 의존성과 빌드 산출물
+dashboard/node_modules/
+dashboard/.next/
+dashboard/.vinext/
+dashboard/.wrangler/
+dashboard/.openai/
+dashboard/dist/
+dashboard/build/
+dashboard/out/
+dashboard/coverage/
+dashboard/*.tsbuildinfo
