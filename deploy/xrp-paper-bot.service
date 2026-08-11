@@ -1,0 +1,28 @@
+[Unit]
+Description=BTC/XRP paper trading bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/xrp-paper-bot/v2
+EnvironmentFile=/home/ubuntu/xrp-paper-bot/v2/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ubuntu/xrp-paper-bot/v2/.venv/bin/python -m engine.loop
+
+# Use the same graceful shutdown path as Ctrl+C so state is persisted.
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=10
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+RestrictSUIDSGID=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

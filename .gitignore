@@ -1,0 +1,20 @@
+# 비밀 — 디스코드 웹훅 URL은 .env에만 둔다 (.env.example이 형식을 설명한다)
+.env
+.env.*
+!.env.example
+
+# 생성물 — 캔들 캐시, 리플레이 로그, 봇 상태, 차트.
+# 전부 tools/fetch_history.py와 tools/replay.py로 다시 만들 수 있다.
+data/
+
+# 파이썬
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# 에디터·OS
+.DS_Store
+.idea/
+.vscode/

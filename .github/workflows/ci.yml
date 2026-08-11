@@ -1,0 +1,43 @@
+name: CI
+
+# main에 직접 푸시할 때와 main으로 향하는 PR에서 돈다.
+# PR에서 도는 게 핵심이다 — 합치기 전에 깨진 걸 잡는 게 CI의 목적이다.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 같은 브랜치에 연달아 푸시하면 이전 실행을 취소한다.
+# 어차피 최신 커밋 결과만 의미가 있고, 무료 실행 시간을 아낀다.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # data/는 .gitignore 대상이라 체크아웃에 캔들 캐시가 없다.
+      # 테스트가 캐시나 네트워크에 의존하면 여기서 깨진다 — 의도한 것이다.
+      # 거래소 호출은 전부 httpx MockTransport로 막혀 있어야 한다.
+      - name: 테스트
+        run: python -m pytest -q
