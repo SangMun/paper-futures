@@ -124,7 +124,9 @@ def main() -> int:
 
             tfs = sorted(spec.required_timeframes, key=cd.interval_seconds)
             if args.interval:
-                tfs = [t for t in tfs if t == args.interval]
+                # 명시적으로 요청한 타임프레임은 전략이 쓰지 않아도 받는다.
+                # 리플레이의 틱 대용(1분봉)이 여기 해당한다.
+                tfs = [args.interval] if args.interval in HISTORY_DAYS else []
             if not tfs:
                 continue
 

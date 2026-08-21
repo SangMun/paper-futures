@@ -36,6 +36,14 @@ from reporting.logs import SignalLog, TradeLog
 from reporting.notify import Notifier
 
 
+# 틱 대용 타임프레임.
+#
+# 10초봉이 더 촘촘하지만 거래소 보관 기간이 짧아 과거 검증에 못 쓴다.
+# 1분봉이면 5분봉 하나를 5조각으로 나눠 본다 — 실시간 폴링(10초)보다
+# 거칠지만, 봉 마감까지 통째로 기다리던 것과는 성격이 다르다.
+TICK_TF = "1m"
+
+
 class ReplayClient:
     """캐시에서 읽은 프레임을 그대로 돌려주는 수집기.
 
@@ -47,8 +55,16 @@ class ReplayClient:
     실시간과 다른 경로를 타게 된다.
     """
 
-    def __init__(self, frames_by_symbol: dict[str, dict[str, pd.DataFrame]]):
+    def __init__(
+        self,
+        frames_by_symbol: dict[str, dict[str, pd.DataFrame]],
+        tick_frames: dict[str, pd.DataFrame] | None = None,
+        tick_tf: str = TICK_TF,
+    ):
         self._frames = frames_by_symbol
+        # 틱 대용 프레임(기본 1분봉). 실행 시계를 재생할 때만 쓴다.
+        self._tick_frames = tick_frames or {}
+        self._tick_tf = tick_tf
 
     def fetch_frames(self, spec: SymbolSpec, limit: int = 0, now_ts=None):
         frames = self._frames.get(spec.contract, {})
@@ -57,6 +73,85 @@ class ReplayClient:
             for tf, df in frames.items()
             if tf in spec.required_timeframes
         }
+
+    def fetch(
+        self,
+        contract: str,
+        interval: str,
+        limit: int = 0,
+        drop_unclosed: bool = True,
+        now_ts=None,
+    ) -> FetchResult:
+        """실행 시계(`Engine.run_tick`)가 부르는 경로.
+
+        drop_unclosed=False면 now_ts 시점의 **진행 중인 봉**을 만들어 붙인다.
+        그 봉은 하위 타임프레임(기본 1분봉)을 now_ts까지 누적해서 만든다.
+        실시간에 거래소가 주는 것과 같은 모양이라, 엔진은 리플레이인지
+        실시간인지 구분하지 못한다 — 그래야 검증에 의미가 있다.
+        """
+
+        df = self._frames.get(contract, {}).get(interval)
+        if df is None or df.empty or now_ts is None:
+            return FetchResult(contract, interval, df if df is not None else cd.to_dataframe([]), [])
+
+        step = cd.interval_seconds(interval)
+        now_ts = int(now_ts)
+        closed = df[df["ts"] + step <= now_ts]
+
+        if drop_unclosed:
+            return FetchResult(contract, interval, closed.reset_index(drop=True), [])
+
+        partial = self._partial_bar(contract, interval, now_ts, step, df)
+        if partial is None:
+            return FetchResult(contract, interval, closed.reset_index(drop=True), [])
+
+        merged = pd.concat([closed, partial], ignore_index=True)
+        return FetchResult(contract, interval, merged.reset_index(drop=True), [])
+
+    def _partial_bar(self, contract, interval, now_ts, step, df):
+        """now_ts 시점까지 누적된 진행 중인 봉 한 줄.
+
+        하위 봉이 아직 하나도 마감되지 않았으면(봉이 막 시작한 순간)
+        시가만 있는 한 점짜리 봉을 만든다. 그 시각에 실제로 알 수 있는
+        값은 시가뿐이므로 미래 참조가 아니다.
+        """
+
+        bar_ts = now_ts // step * step
+        row = df[df["ts"] == bar_ts]
+        if row.empty:
+            return None                 # 데이터에 없는 구간
+
+        ticks = self._tick_frames.get(contract)
+        tick_step = cd.interval_seconds(self._tick_tf)
+
+        if ticks is not None and not ticks.empty:
+            window = ticks[
+                (ticks["ts"] >= bar_ts)
+                & (ticks["ts"] + tick_step <= now_ts)
+            ]
+        else:
+            window = None
+
+        open_ = float(row["open"].iloc[0])
+        if window is None or window.empty:
+            price = open_
+            return pd.DataFrame([{
+                "ts": bar_ts,
+                "dt": pd.to_datetime(bar_ts, unit="s", utc=True),
+                "open": open_, "high": price, "low": price, "close": price,
+                "volume": 0.0, "quote_volume": 0.0,
+            }])
+
+        return pd.DataFrame([{
+            "ts": bar_ts,
+            "dt": pd.to_datetime(bar_ts, unit="s", utc=True),
+            "open": open_,
+            "high": float(window["high"].max()),
+            "low": float(window["low"].min()),
+            "close": float(window["close"].iloc[-1]),
+            "volume": float(window["volume"].sum()),
+            "quote_volume": float(window["quote_volume"].sum()),
+        }])
 
     def close(self) -> None:
         pass
@@ -73,6 +168,16 @@ class ReplayResult:
     trades: list[dict] = field(default_factory=list)
     signals: list[dict] = field(default_factory=list)
     open_positions: int = 0
+
+    # 지정가 체결률. 메이커 전환을 켜면 성과보다 먼저 봐야 할 숫자다 —
+    # 체결이 안 되면 그건 같은 전략이 아니라 다른 전략이다.
+    limit_filled: int = 0
+    limit_expired: int = 0
+
+    @property
+    def limit_fill_rate(self) -> float:
+        total = self.limit_filled + self.limit_expired
+        return self.limit_filled / total if total else 0.0
 
     @property
     def return_pct(self) -> float:
@@ -244,6 +349,9 @@ def replay(
     progress_every: int = 0,
     risk=None,
     live_like: bool = True,
+    ticks: bool = False,
+    tick_tf: str = TICK_TF,
+    last: int | None = None,
 ) -> ReplayResult:
     """과거 전체 구간을 봉 단위로 재생한다.
 
@@ -272,6 +380,19 @@ def replay(
 
     frames_by_symbol = {s.contract: load_frames(s) for s in engine_symbols}
 
+    # 틱 대용 프레임. 없으면 실행 시계를 재생할 수 없으므로 명시적으로 막는다.
+    # 조용히 봉 모드로 떨어지면 "틱으로 검증했다"는 잘못된 결론이 남는다.
+    tick_frames: dict[str, pd.DataFrame] = {}
+    if ticks:
+        for s in engine_symbols:
+            df = cache.load(s.contract, tick_tf)
+            if df.empty:
+                raise SystemExit(
+                    f"{s.contract} {tick_tf} 캐시가 없다. "
+                    f"tools/fetch_history.py로 먼저 받을 것."
+                )
+            tick_frames[s.contract] = df
+
     # 교차 종목 컨텍스트와 OI는 엔진의 `_with_context`가 캐시에서 읽는다.
     # 리플레이도 같은 경로를 타므로 여기서 따로 넣지 않는다.
 
@@ -291,6 +412,15 @@ def replay(
     clock_step, primary, entry_tf, df = min(clocks, key=lambda x: x[0])
 
     total = len(df)
+
+    # last는 "가장 최근 N봉"이다. 1분봉 캐시가 짧아 틱 검증은 최근 구간에서만
+    # 가능하므로 필요하다. warmup은 지표 안정 구간이라 앞에서 잘라내는 값이고,
+    # 여기서는 시작 지점을 뒤로 옮기는 용도로 재사용한다.
+    if last is not None:
+        if last >= total:
+            raise SystemExit(f"last={last}가 전체 {total}봉보다 크다")
+        warmup = max(warmup, total - last)
+
     end = total if max_bars is None else min(total, warmup + max_bars)
 
     # **매 실행마다 로그를 비운다.**
@@ -314,7 +444,7 @@ def replay(
     engine = Engine(
         strategies=engine_strategies,
         symbols=engine_symbols,
-        client=ReplayClient(frames_by_symbol),
+        client=ReplayClient(frames_by_symbol, tick_frames, tick_tf),
         broker=Broker(balance=balance),
         bot_state=bot_state,
         trade_log=TradeLog(log_dir / "trades.csv"),
@@ -328,10 +458,47 @@ def replay(
 
     started = time.perf_counter()
 
+    tick_step = cd.interval_seconds(tick_tf) if ticks else 0
+
+    if ticks:
+        # **틱 프레임이 리플레이 구간을 덮는지 확인한다.**
+        #
+        # 안 덮으면 _partial_bar가 시가만 있는 한 점짜리 봉으로 떨어져
+        # 틱 경로가 봉 경로와 똑같은 결과를 낸다. 그걸 "차이 없음"으로
+        # 읽으면 검증했다고 착각하게 된다. 조용히 넘어가지 않는다.
+        window_start = int(df["ts"].iloc[warmup])
+        window_end = int(df["ts"].iloc[end - 1]) + clock_step
+        for contract, tdf in tick_frames.items():
+            if tdf.empty:
+                raise SystemExit(f"{contract} {tick_tf} 프레임이 비었다")
+            have_start = int(tdf["ts"].iloc[0])
+            # 마지막 1분봉은 ts부터 ts+tick_step까지를 덮는다.
+            have_end = int(tdf["ts"].iloc[-1]) + tick_step
+            if have_start > window_start or have_end < window_end:
+                raise SystemExit(
+                    f"{contract} {tick_tf} 캐시가 리플레이 구간을 덮지 못한다.\n"
+                    f"  필요: {pd.to_datetime(window_start, unit='s', utc=True)}"
+                    f" ~ {pd.to_datetime(window_end, unit='s', utc=True)}\n"
+                    f"  보유: {pd.to_datetime(have_start, unit='s', utc=True)}"
+                    f" ~ {pd.to_datetime(have_end, unit='s', utc=True)}\n"
+                    f"  1분봉은 거래소 보관 기간이 짧다. --last로 최근 구간만 돌릴 것."
+                )
+
     for i in range(warmup, end):
         try:
             if live_like:
-                close_ts = int(df["ts"].iloc[i]) + clock_step
+                bar_start = int(df["ts"].iloc[i])
+                close_ts = bar_start + clock_step
+
+                if ticks:
+                    # 봉이 진행되는 동안의 실행 시계.
+                    for t in range(bar_start + tick_step, close_ts, tick_step):
+                        engine.run_tick(now_ts=t)
+                    # 봉 마감 직후 한 번 더. 여기서 방금 닫힌 봉의 꼬리
+                    # (마지막 틱 이후 구간)를 처리하고 covered_bar_ts를
+                    # 올린다. 실시간 run()의 순서와 같다.
+                    engine.run_tick(now_ts=close_ts + 1)
+
                 engine.run_once(decision_ts=close_ts)
             else:
                 engine.run_once(as_of=i)
@@ -355,4 +522,6 @@ def replay(
         trades=read_trades(log_dir / "trades.csv"),
         signals=read_signals(log_dir / "signals.jsonl"),
         open_positions=len(engine.bot_state.positions),
+        limit_filled=engine.limit_stats["filled"],
+        limit_expired=engine.limit_stats["expired"],
     )

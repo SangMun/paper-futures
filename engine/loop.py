@@ -21,10 +21,11 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
-from config.settings import RISK, RUNTIME, RiskConfig
+from config.settings import ENTRY, RISK, RUNTIME, RiskConfig
 from config.symbols import ACTIVE, SymbolSpec
 from core import candles as cd
 from core import cache
+from core import live
 from core.exchange import (
     ExchangeError,
     FetchResult,
@@ -354,6 +355,286 @@ class Engine:
                     spec, position, frames, df, idx
                 )
 
+    # ------------------------------------------------------------ 실행 시계
+
+    def run_tick(self, now_ts: float | None = None) -> int:
+        """10초 시계. 보유 포지션만 실시간 시세로 감시한다.
+
+        지표를 다시 계산하지 않고 진입 판단도 하지 않는다. 여기서 하는 일은
+        "이미 정해진 손절·목표에 가격이 닿았는가"뿐이다. 그래서 진행 중인
+        봉을 써도 재현성이 깨지지 않는다 — 판단의 입력이 아니라 체결의
+        입력이기 때문이다.
+
+        봉 시계(run_once)가 봉 마감까지 기다리는 동안 방치되던 구간을 메운다.
+        5분봉이면 최대 5분이던 반응 지연이 폴링 간격으로 줄어든다.
+
+        반환값은 이번에 처리한 청산 건수.
+        """
+
+        if not self.bot_state.positions and not self.pending_signals:
+            return 0
+        if now_ts is None:
+            now_ts = time.time()
+        now_ts = int(now_ts)
+
+        exits = 0
+        changed = False
+
+        for spec in self.symbols:
+            # 포지션·대기 주문이 있는 타임프레임만 받는다. 틱에서는 지표를
+            # 쓰지 않으므로 상위봉이나 문맥봉을 받을 이유가 없다.
+            tfs = {
+                p.entry_tf
+                for p in self.bot_state.positions
+                if p.symbol == spec.contract
+            }
+            tfs |= self._pending_timeframes(spec)
+            for tf in sorted(tfs, key=cd.interval_seconds):
+                snap = self._live_snapshot(spec, tf, now_ts)
+                if snap is None:
+                    continue
+                quote, closed_row, atr = snap
+
+                for position in list(self.bot_state.positions):
+                    if position.symbol != spec.contract or position.entry_tf != tf:
+                        continue
+                    closed_out, moved = self._tick_position(
+                        position, quote, closed_row, atr
+                    )
+                    exits += int(closed_out)
+                    changed = changed or closed_out or moved
+
+                # 순서는 run_once와 같다 — 청산 판정 뒤 지정가 체결.
+                # 위에서 만든 포지션 목록 스냅샷에 새 체결분이 들어가지
+                # 않으므로, 방금 체결된 포지션이 같은 틱에서 두 번
+                # 평가되지 않는다.
+                if self._fill_pending_on_tick(spec, tf, quote):
+                    changed = True
+
+        if changed:
+            self._persist()
+        return exits
+
+    def _pending_timeframes(self, spec: SymbolSpec) -> set[str]:
+        """이 종목의 대기 지정가 주문이 걸린 타임프레임."""
+
+        out: set[str] = set()
+        for item in self.pending_signals:
+            if item["spec"].contract != spec.contract:
+                continue
+            strategy = _strategy_named(self, spec, item["signal"].strategy)
+            tf = _entry_tf_of(spec, strategy)
+            if tf:
+                out.add(tf)
+        return out
+
+    def _fill_pending_on_tick(self, spec: SymbolSpec, tf: str, quote) -> int:
+        """대기 중인 지정가 주문을 실시간 시세로 체결한다.
+
+        봉 마감을 기다리면 지정가가 스친 뒤 되돌아간 구간을 통째로 놓친다.
+        진입이 밀리면 전략이 노린 자리가 아닌 곳에서 잡히거나 아예 못 잡는다.
+
+        포지션 감시와 달리 **누적 고저를 그대로 쓴다.** 지정가는 가격이
+        고정이라 트레일처럼 움직이지 않으므로, 봉 시작 이후 언제 닿았든
+        그 순간 체결됐을 것이기 때문이다. 이미 지나간 극값으로 잘못
+        체결될 여지가 없다.
+
+        "주문을 낸 봉으로는 체결하지 않는다"는 규칙도 자동으로 지켜진다.
+        진행 중인 봉은 주문을 낸 봉보다 항상 뒤다.
+
+        TTL 만료는 여기서 보지 않는다. 봉 단위로 세는 값이라 봉 시계
+        (process_pending)에 남는다.
+        """
+
+        filled = 0
+        for item in list(self.pending_signals):
+            if item["spec"].contract != spec.contract:
+                continue
+
+            signal = item["signal"]
+            strategy = _strategy_named(self, spec, signal.strategy)
+            if _entry_tf_of(spec, strategy) != tf:
+                continue
+            if quote.bar_ts <= int(item["placed_ts"]):
+                continue
+
+            price = signal.entry
+            touched = (
+                quote.bar_low <= price
+                if signal.side == "long"
+                else quote.bar_high >= price
+            )
+            if not touched:
+                continue
+
+            self.pending_signals.remove(item)
+            self._now_ts = int(quote.observed_ts)
+            before = len(self.bot_state.positions)
+            # **체결봉 손절 검사를 넘기지 않는다(fill_bar=None).**
+            #
+            # 봉 경로는 봉 안의 순서를 모르니 "체결봉이 손절까지 갔으면 즉시
+            # 손절"로 보수적으로 처리한다. 틱 경로는 체결 시점을 정확히 알기
+            # 때문에 같은 처리를 하면 **체결 전에 찍힌 저점**으로 손절시키게
+            # 된다 — window_since가 막는 것과 같은 종류의 오류다.
+            #
+            # 누락 위험도 없다. 아래에서 관측 기준점을 지금으로 맞추므로
+            # 체결 이후 구간은 다음 틱이 곧바로 판정한다.
+            self._fill_limit(item, None, bar_ts=quote.bar_ts)
+            filled += 1
+
+            # 갓 생긴 포지션의 관측 기준점을 지금으로 맞춘다.
+            # 안 하면 다음 틱의 구간이 봉 시작까지 거슬러 올라가, 체결 전
+            # 가격 범위로 손절·트레일을 판정하게 된다.
+            if len(self.bot_state.positions) > before:
+                opened = self.bot_state.positions[-1]
+                opened.ticked_bar_ts = quote.bar_ts
+                opened.last_tick_ts = int(quote.observed_ts)
+                opened.last_tick_high = quote.bar_high
+                opened.last_tick_low = quote.bar_low
+                opened.last_tick_price = quote.last
+
+        return filled
+
+    def _live_snapshot(self, spec: SymbolSpec, tf: str, now_ts: int):
+        """진행 중인 봉 + 직전 확정봉 + ATR.
+
+        ATR은 **확정봉으로만** 계산한다. 진행 중인 봉을 넣으면 같은 시점을
+        다시 계산할 때 값이 달라져 트레일 폭이 재현되지 않는다.
+        """
+
+        try:
+            result = self.client.fetch(
+                spec.contract,
+                tf,
+                limit=RUNTIME.candle_limit,
+                drop_unclosed=False,
+                now_ts=now_ts,
+            )
+        except ExchangeError as exc:
+            print(f"[{spec.contract}] {tf} 실시간 수집 실패: {exc}")
+            return None
+
+        df = result.df
+        quote = live.from_frame(df, tf, now_ts=now_ts)
+        if quote is None:
+            return None         # 진행 중인 봉이 아직 없다. 봉 시계가 처리한다.
+
+        if live.is_feed_lagging(df, tf, now_ts):
+            # 멈춘 시세로 손절을 판정하면 실제와 다른 가격에서 청산된다.
+            print(f"[{spec.contract}] {tf} 시세 피드 지연. 이번 틱 건너뜀")
+            return None
+
+        closed = df.iloc[:-1]
+        if len(closed) < 2:
+            return None
+
+        return quote, closed.iloc[-1], self._atr_of(closed, -1)
+
+    def _tick_position(
+        self,
+        position: st.OpenPosition,
+        quote: live.LiveQuote,
+        closed_row,
+        atr: float,
+    ) -> tuple[bool, bool]:
+        """포지션 하나에 실시간 시세를 반영한다. (청산됨, 상태가 바뀜)"""
+
+        before_stop = position.stop
+
+        # 봉이 넘어갔으면 직전 봉의 남은 구간을 먼저 처리한다.
+        # 폴링 간격 때문에 봉의 마지막 몇 초는 어떤 틱도 보지 못하는데,
+        # 이걸 버리면 봉 끝에서 손절이 닿아도 놓친다.
+        rolled = (
+            position.ticked_bar_ts
+            and position.ticked_bar_ts != quote.bar_ts
+            and closed_row is not None
+            and int(closed_row["ts"]) == position.ticked_bar_ts
+        )
+        if rolled:
+            tail = live.tail_window(
+                closed_row,
+                position.last_tick_high,
+                position.last_tick_low,
+                position.last_tick_price,
+            )
+            closed_out = self._apply_tick(position, tail, atr, quote.observed_ts)
+            position.covered_bar_ts = position.ticked_bar_ts
+            if closed_out:
+                return True, True
+
+        window = live.window_since(
+            quote,
+            position.ticked_bar_ts,
+            position.last_tick_high,
+            position.last_tick_low,
+            position.last_tick_price,
+        )
+        closed_out = self._apply_tick(position, window, atr, quote.observed_ts)
+        if closed_out:
+            return True, True
+
+        position.ticked_bar_ts = quote.bar_ts
+        position.last_tick_ts = quote.observed_ts
+        position.last_tick_high = quote.bar_high
+        position.last_tick_low = quote.bar_low
+        position.last_tick_price = quote.last
+
+        return False, position.stop != before_stop
+
+    def _apply_tick(
+        self,
+        position: st.OpenPosition,
+        window: live.TickWindow,
+        atr: float,
+        observed_ts: int,
+    ) -> bool:
+        """구간 하나를 청산 판정에 넣는다. 전량 청산됐으면 True."""
+
+        state = _to_exit_state(position)
+        try:
+            if math.isfinite(atr) and atr > 0:
+                event = ex.process_tick(
+                    state,
+                    open_=window.open,
+                    high=window.high,
+                    low=window.low,
+                    last=window.last,
+                    atr=atr,
+                )
+            else:
+                # ATR 워밍업 중. 청산 판정은 그대로 하고 트레일만 건너뛴다.
+                event = ex.check_exit(
+                    state,
+                    window.open,
+                    window.high,
+                    window.low,
+                    window.last,
+                    allow_time_exit=False,
+                )
+        except ex.ExitError as exc:
+            print(f"[{position.symbol}] 틱 청산 판정 실패: {exc}")
+            return False
+
+        _sync_from_exit_state(position, state)
+        if event is None:
+            return False
+
+        self._now_ts = int(observed_ts)
+
+        if event.reason == ex.EXIT_TP1:
+            ex.apply_tp1(state, event)
+            _sync_from_exit_state(position, state)
+            fully_closed = state.remaining_ratio <= 1e-12
+            self._record_exit(position, event, partial=not fully_closed)
+            if fully_closed:
+                self.bot_state.positions.remove(position)
+                return True
+            return False        # 부분 익절. 남은 물량은 계속 감시한다
+
+        self._record_exit(position, event, partial=False)
+        self.bot_state.positions.remove(position)
+        return True
+
     def _refresh_strategy_target(
         self,
         spec: SymbolSpec,
@@ -397,6 +678,12 @@ class Engine:
         position.bars_held += 1
         state = _to_exit_state(position)
 
+        if position.covered_bar_ts == int(bar["ts"]):
+            # 이 봉은 실행 시계가 마감까지 전 구간을 감시했다.
+            # 같은 OHLC로 손절·익절을 다시 보면 봉 안의 순서를 잃어
+            # 없던 청산이 생긴다. 여기서는 시간 손절만 담당한다.
+            return self._advance_time_only(position, state, float(bar["close"]))
+
         ohlc = dict(
             open_=float(bar["open"]),
             high=float(bar["high"]),
@@ -430,6 +717,28 @@ class Engine:
             if fully_closed:
                 self.bot_state.positions.remove(position)
             return True
+
+        self._record_exit(position, event, partial=False)
+        self.bot_state.positions.remove(position)
+        return True
+
+    def _advance_time_only(
+        self,
+        position: st.OpenPosition,
+        state: ex.PositionState,
+        close: float,
+    ) -> bool:
+        """실행 시계가 이미 본 봉. 보유 봉 수 한도만 확인한다."""
+
+        try:
+            event = ex.check_time_exit(state, close=close)
+        except ex.ExitError as exc:
+            print(f"[{position.symbol}] 시간 청산 판정 실패: {exc}")
+            return True
+
+        _sync_from_exit_state(position, state)
+        if event is None:
+            return False
 
         self._record_exit(position, event, partial=False)
         self.bot_state.positions.remove(position)
@@ -675,6 +984,31 @@ class Engine:
             return None
         return len(same) + len(pending) + 1
 
+    def _as_maker_entry(self, signal):
+        """시장가 신호를 지정가로 돌린다. 설정으로 켤 때만.
+
+        왕복 taker 0.19% vs maker -0.02%. XRP 패턴은 목표 수익이 0.5% 안팎이라
+        이 0.21%p가 성과를 그대로 가른다 — 실거래 8건에서 수수료 전 손익이
+        명목의 +0.008%인데 수수료로 0.15%를 냈다.
+
+        대신 일부 신호는 체결되지 않는다. 그래서 기본값이 꺼짐이고,
+        체결률(limit_stats)을 성과보다 먼저 봐야 한다.
+
+        전략이 이미 지정가로 냈으면 손대지 않는다. TTL도 전략 것이 우선이다 —
+        BTC 회귀채널은 12봉짜리를 쓰는데 여기서 2로 덮으면 전략이 바뀐다.
+        """
+
+        if not ENTRY.prefer_maker_entries:
+            return signal
+        if signal.order_type != "market":
+            return signal
+
+        return replace(
+            signal,
+            order_type="limit",
+            ttl_bars=signal.ttl_bars or ENTRY.maker_entry_ttl_bars,
+        )
+
     def _consider(
         self,
         spec: SymbolSpec,
@@ -724,6 +1058,8 @@ class Engine:
         if tranche > signal.max_tranches:
             self._skip(signal, spec, SKIP_MAX_TRANCHES, tranche=tranche)
             return
+
+        signal = self._as_maker_entry(signal)
 
         if (
             allow_market_defer
@@ -1142,7 +1478,7 @@ class Engine:
                     age_bars=age,
                 )
 
-    def _fill_limit(self, item: dict, fill_bar=None) -> None:
+    def _fill_limit(self, item: dict, fill_bar=None, bar_ts: int | None = None) -> None:
         """지정가 체결. 메이커라 수수료가 리베이트(음수)다.
 
         fill_bar가 손절선까지 지나갔다면 같은 봉에 즉시 손절한다. 지정가는
@@ -1183,7 +1519,11 @@ class Engine:
             entry_tf=_entry_tf_of(spec, _strategy_named(self, spec, signal.strategy)),
             # 체결봉은 아래에서 손절만 보수적으로 검사한다. 정상적인 목표·시간
             # 진행은 다음 자기 타임프레임 봉부터 시작한다.
-            last_bar_ts=self._now_ts,
+            #
+            # 틱 체결은 _now_ts가 벽시계라 봉 경계와 맞지 않는다. 그대로 두면
+            # 이 값이 어떤 봉 ts와도 같지 않아 체결봉까지 보유 봉 수에 세어지고,
+            # 시간 손절이 한 봉 일찍 터진다. 진행 중인 봉 ts를 넘겨 막는다.
+            last_bar_ts=self._now_ts if bar_ts is None else int(bar_ts),
             opened_ts=int(time.time()),
         )
         self.bot_state.positions.append(opened)
@@ -1365,6 +1705,13 @@ class Engine:
         while max_iterations is None or iteration < max_iterations:
             iteration += 1
             try:
+                # 실행 시계를 먼저 돌린다.
+                #
+                # 봉이 막 넘어간 회차에서, 직전 봉의 마지막 몇 초(어떤 틱도
+                # 보지 못한 구간)를 run_tick이 처리하고 covered_bar_ts를 올린다.
+                # 그래야 뒤이은 run_once가 그 봉을 중복 판정하지 않는다.
+                # 순서를 뒤집으면 봉 시계가 먼저 전체를 다시 보게 된다.
+                self.run_tick()
                 self.run_once()
             except KeyboardInterrupt:
                 print("\n중단 요청. 상태 저장 후 종료.")
