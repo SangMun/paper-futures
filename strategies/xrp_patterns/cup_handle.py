@@ -162,8 +162,6 @@ class CupHandle:
         quality = cb.assess(df, prepared, as_of, side, left.index, level, profile, prior_ok, self.tf)
         quality.append("handle_dry")
 
-        if cb.retest_ok(df, as_of - 1, as_of, level, side):
-            quality.append("retested")
         if len(quality) < cb.MIN_QUALITY:
             return None
 

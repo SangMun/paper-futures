@@ -133,8 +133,6 @@ class DoubleTop:
         if v1 > 0 and v2 < v1:
             quality.append("second_peak_weaker")
 
-        if cb.retest_ok(df, as_of - 1, as_of, neckline, side):
-            quality.append("retested")
         if len(quality) < cb.MIN_QUALITY:
             return None
 
