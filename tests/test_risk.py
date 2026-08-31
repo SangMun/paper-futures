@@ -744,3 +744,42 @@ def test_새_날은_손실_기준점만_옮긴다():
 
     assert a.day_start_balance == 950.0
     assert a.consecutive_losses["A"] == 3     # 연패는 날짜와 무관하게 이어진다
+
+
+def test_열린_포지션_증거금은_가용에서_빠진다():
+    """잔고에서는 수수료와 실현손익만 빠지므로, 열린 포지션이 묶은 증거금을
+    따로 빼지 않으면 사이징이 매번 잔고 전액을 가용으로 본다. 실측으로
+    2026-08-24에 XRP 3포지션이 잔고 1,096 USDT에 증거금 1,794 USDT를
+    요구했다 — 실거래소면 세 번째 주문이 거부됐을 자리다."""
+
+    from engine import state as st
+
+    position = st.OpenPosition(
+        symbol="XRP_USDT", side="long", strategy="xrp_patterns",
+        entry=1.0, contracts=100, leverage=2,
+        stop=0.99, tp1=1.02, partial_ratio=0.5, trail_atr_mult=1.5,
+        max_hold_bars=100, risk_amount=10.0,
+    )
+    # 명목 = 100계약 * 1.0 * 배수 10 = 1,000, 레버리지 2배 -> 증거금 500
+    assert st.used_margin([position]) == pytest.approx(500.0)
+    assert st.used_margin([]) == 0.0
+
+    # 가용이 줄면 같은 신호라도 더 작은 포지션이 나오거나 거절된다.
+    full = sz.size_position(XRP, "long", 1.0, 0.99, 1_000.0, "xrp_patterns")
+    squeezed = sz.size_position(
+        XRP, "long", 1.0, 0.99, 1_000.0, "xrp_patterns", available_margin=50.0
+    )
+    assert full.ok
+    assert not squeezed.ok or squeezed.notional <= full.notional
+
+
+def test_엔진이_가용_증거금을_사이징에_넘긴다():
+    """파라미터는 있는데 호출부가 안 넘겨서 오래 죽어 있던 경로다."""
+
+    import inspect
+
+    from engine import loop
+
+    source = inspect.getsource(loop.Engine)
+    assert "available_margin=" in source
+    assert "used_margin" in source

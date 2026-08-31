@@ -1112,6 +1112,11 @@ class Engine:
             signal.strategy,
             tranche=tranche,
             max_tranches=signal.max_tranches,
+            # 열린 포지션이 묶은 증거금을 뺀 나머지만 새 포지션에 쓸 수 있다.
+            # 넘기지 않으면 sizing이 매번 잔고 전액을 가용으로 본다.
+            available_margin=max(
+                0.0, self.bot_state.balance - st.used_margin(self.bot_state.positions)
+            ),
             risk=self.risk,
             execution=execution,
             risk_multiplier=getattr(signal, "risk_multiplier", 1.0),

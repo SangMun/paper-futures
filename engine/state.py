@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from config.settings import RUNTIME, STATE_PATH
+from config.settings import CONTRACT_SPECS, RUNTIME, STATE_PATH
 
 
 STATE_VERSION = 4
@@ -94,6 +94,23 @@ class OpenPosition:
     def __post_init__(self):
         if not self.extreme:
             self.extreme = self.entry
+
+
+def used_margin(positions: list[OpenPosition]) -> float:
+    """열린 포지션이 묶고 있는 격리증거금 합계.
+
+    잔고에서는 수수료와 실현손익만 빠지므로, 이 값을 빼야 실제로 새 포지션에
+    쓸 수 있는 돈이 나온다. 이걸 반영하지 않으면 사이징이 매번 잔고 전액을
+    가용으로 보고 계좌를 초과 발주한다 — 실측으로 2026-08-24에 XRP 3포지션이
+    잔고 1,096 USDT에 증거금 1,794 USDT(164%)를 요구했다.
+    """
+
+    total = 0.0
+    for position in positions:
+        multiplier = float(CONTRACT_SPECS[position.symbol]["multiplier"])
+        notional = position.contracts * position.entry * multiplier
+        total += notional / max(1, position.leverage)
+    return total
 
 
 @dataclass
