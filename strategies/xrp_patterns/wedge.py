@@ -151,14 +151,8 @@ class Wedge:
                 return None
 
         # 선행 추세: 쐐기 방향과 같은 흐름이 앞에 있었는가
-        before = max(0, start - 30)
-        prior = df["close"].iloc[before : start + 1]
-        prior_ok = bool(
-            len(prior) > 5
-            and (
-                (kind == "rising_wedge" and prior.iloc[-1] > prior.iloc[0])
-                or (kind == "falling_wedge" and prior.iloc[-1] < prior.iloc[0])
-            )
+        prior_ok = cb.prior_trend_ok(
+            df, start, "up" if kind == "rising_wedge" else "down", 30
         )
 
         profile = cb.profile_at(df, as_of)
