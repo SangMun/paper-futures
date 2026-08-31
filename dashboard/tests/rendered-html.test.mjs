@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function render() {
+async function render(pathname = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", {
+    new Request(`http://localhost${pathname}`, {
       headers: { accept: "text/html" },
     }),
     {
@@ -23,6 +23,22 @@ async function render() {
   );
 }
 
+test("server-renders the BTC 25x strategy dashboard shell", async () => {
+  const response = await render("/btc-25x");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /<title>BTC 25× 국면 채널 · Paper Desk<\/title>/i);
+  assert.match(html, /BTC 25× 전략 데스크를 준비하는 중/);
+});
+
+test("server-renders the XRP pattern dashboard shell", async () => {
+  const response = await render("/xrp-patterns");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /<title>XRP 패턴 스캐너 · Paper Desk<\/title>/i);
+  assert.match(html, /XRP 패턴 스캐너를 준비하는 중/);
+});
+
 test("server-renders the BTC strategy dashboard shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
@@ -36,8 +52,9 @@ test("server-renders the BTC strategy dashboard shell", async () => {
 });
 
 test("ships every requested timeframe and strategy-specific controls", async () => {
-  const [source, rawData, packageJson] = await Promise.all([
+  const [source, routeSource, rawData, packageJson] = await Promise.all([
     readFile(new URL("../app/BtcDashboard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/btc-live/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../public/btc-dashboard.json", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
@@ -55,10 +72,21 @@ test("ships every requested timeframe and strategy-specific controls", async () 
 
   assert.match(source, /회귀채널 100 · 2σ/);
   assert.match(source, /LIVE PREVIEW/);
-  assert.match(source, /99개 확정봉 \+ 현재 1시간봉/);
+  assert.match(source, /연속 100봉 기준 · 결측 자동 보정/);
   assert.match(source, /AWS 주문 엔진은 아직 확정봉 방식/);
   assert.match(source, /EMA 20 \/ 60/);
+  assert.match(source, /RSI \/ MACD/);
+  assert.match(source, /진입 조건에는 미반영/);
   assert.match(source, /BTC 회귀채널 포지션/);
   assert.match(source, /가격 수익률/);
+  assert.match(source, /onWheel=\{handleWheel\}/);
+  assert.match(source, /onPointerDown=\{handlePointerDown\}/);
+  assert.match(source, /화면 확대/);
+  assert.match(source, /과거 \+800/);
+  assert.match(routeSource, /query\.set\("to"/);
+  assert.match(routeSource, /historyMode/);
+  assert.match(routeSource, /fetchAfter/);
+  assert.match(routeSource, /catchupMode/);
+  assert.match(routeSource, /maximumBars = 5_000/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });
