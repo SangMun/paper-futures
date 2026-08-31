@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import sys
@@ -18,8 +19,13 @@ sys.path.insert(0, str(ROOT))
 
 from indicators import atr as atr_indicator  # noqa: E402
 from indicators import ma  # noqa: E402
+from indicators import oscillators  # noqa: E402
 from indicators import regression_channel as rc  # noqa: E402
+from indicators import volume as volume_indicator  # noqa: E402
+from indicators import vwap as vwap_indicator  # noqa: E402
 from core import candles as candle_utils  # noqa: E402
+from config.settings import BTC_REGIME_25X, FEES  # noqa: E402
+from engine.loop import build_strategies  # noqa: E402
 
 
 GATE_CANDLES = "https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
@@ -41,16 +47,21 @@ def finite(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def fetch_candles(client: httpx.Client, timeframe: str, limit: int = 420):
+def fetch_candles(
+    client: httpx.Client,
+    timeframe: str,
+    contract: str = "BTC_USDT",
+    limit: int = 560,
+):
     response = client.get(
         GATE_CANDLES,
-        params={"contract": "BTC_USDT", "interval": timeframe, "limit": limit},
+        params={"contract": contract, "interval": timeframe, "limit": limit},
     )
     response.raise_for_status()
     frame = candle_utils.to_dataframe(response.json())
     now = int(time.time())
     step = TIMEFRAMES[timeframe]
-    return frame.loc[frame["ts"] + step <= now].tail(360).reset_index(drop=True)
+    return frame.loc[frame["ts"] + step <= now].tail(500).reset_index(drop=True)
 
 
 def enrich(frame):
@@ -58,6 +69,13 @@ def enrich(frame):
     ema20 = ma.ema(frame, 20)
     ema60 = ma.ema(frame, 60)
     atr14 = atr_indicator.atr(frame, 14)
+    rsi14 = oscillators.rsi(frame, 14)
+    macd = oscillators.macd(frame, fast=12, slow=26, signal=9)
+    sma20 = ma.sma(frame, 20)
+    sma25 = ma.sma(frame, 25)
+    sma50 = ma.sma(frame, 50)
+    session_vwap = vwap_indicator.vwap(frame)
+    rvol20 = volume_indicator.rvol(frame, 20)
 
     candles = []
     for index, row in frame.iterrows():
@@ -68,7 +86,8 @@ def enrich(frame):
                 "high": finite(row["high"]),
                 "low": finite(row["low"]),
                 "close": finite(row["close"]),
-                "volume": finite(row["quote_volume"]),
+                "volume": finite(row["volume"]),
+                "quoteVolume": finite(row["quote_volume"]),
                 "mid": finite(channel["mid"].iloc[index]),
                 "upper": finite(channel["upper"].iloc[index]),
                 "lower": finite(channel["lower"].iloc[index]),
@@ -77,6 +96,15 @@ def enrich(frame):
                 "ema20": finite(ema20.iloc[index]),
                 "ema60": finite(ema60.iloc[index]),
                 "atr": finite(atr14.iloc[index]),
+                "rsi14": finite(rsi14.iloc[index]),
+                "macd": finite(macd["macd"].iloc[index]),
+                "macdSignal": finite(macd["signal"].iloc[index]),
+                "macdHist": finite(macd["hist"].iloc[index]),
+                "sma20": finite(sma20.iloc[index]),
+                "sma25": finite(sma25.iloc[index]),
+                "sma50": finite(sma50.iloc[index]),
+                "vwap": finite(session_vwap.iloc[index]),
+                "rvol": finite(rvol20.iloc[index]),
             }
         )
     return candles
@@ -158,6 +186,202 @@ def load_state(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _number(row: dict, key: str, default: float = 0.0) -> float:
+    value = finite(row.get(key))
+    return default if value is None else value
+
+
+def _entry_signals(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    records = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if record.get("action") == "entry":
+            records.append(record)
+    return records
+
+
+def load_signal_events(path: Path, limit: int = 120) -> list[dict]:
+    """최근 XRP 신호와 차단 사유를 대시보드용으로 정규화한다."""
+
+    if not path.exists():
+        return []
+    events = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if row.get("symbol") != "XRP_USDT" or row.get("action") not in {"entry", "skip"}:
+            continue
+        notes = row.get("notes") or []
+        if isinstance(notes, str):
+            notes = [notes]
+        events.append(
+            {
+                "time": int(row.get("ts") or 0),
+                "action": row.get("action"),
+                "strategy": row.get("strategy") or "",
+                "side": row.get("side"),
+                "skipReason": row.get("skip_reason"),
+                "entry": finite(row.get("entry")),
+                "stop": finite(row.get("stop")),
+                "target": finite(row.get("tp1")),
+                "score": finite(row.get("score")),
+                "reasons": row.get("reasons") or [],
+                "indicators": row.get("indicators") or {},
+                "detail": row.get("detail"),
+                "notes": notes,
+            }
+        )
+    return sorted(events, key=lambda event: event["time"], reverse=True)[:limit]
+
+
+def xrp_pattern_monitors() -> list[dict]:
+    """실제 엔진에 등록된 XRP 패턴 인스턴스만 노출한다."""
+
+    monitors = []
+    for strategy in build_strategies()["XRP_USDT"]:
+        tf = strategy.tf
+        family = strategy.name.removeprefix("xrp_patterns.").rsplit(".", 1)[0]
+        monitors.append(
+            {
+                "name": strategy.name,
+                "family": family,
+                "timeframe": tf.entry,
+                "contextTimeframe": tf.context,
+                "confirmTimeframe": tf.confirm,
+                "orderType": "limit" if getattr(strategy, "limit_entry", False) else "market",
+                "trendAlign": bool(getattr(strategy, "trend_align", False)),
+                "blockedUtcHours": sorted(getattr(strategy, "block_hours", ())),
+            }
+        )
+    return monitors
+
+
+def _matching_signal(row: dict, signals: list[dict], used: set[int]) -> dict | None:
+    price = _number(row, "price")
+    candidates = []
+    for index, signal in enumerate(signals):
+        if index in used:
+            continue
+        if any(signal.get(key) != row.get(key) for key in ("strategy", "symbol", "side")):
+            continue
+        signal_price = finite(signal.get("entry"))
+        price_error = abs((signal_price or 0.0) - price) / max(abs(price), 1e-12)
+        time_error = abs(int(signal.get("ts", 0)) - int(row.get("ts", 0)))
+        if price_error <= 1e-5:
+            candidates.append((price_error, time_error, index, signal))
+    if not candidates:
+        return None
+    _, _, index, signal = min(candidates)
+    used.add(index)
+    return signal
+
+
+def _exit_mode(events: list[dict]) -> str:
+    reasons = [event["reason"] for event in events]
+    if "tp1" in reasons and reasons[-1] == "trail":
+        return "tp1_trail"
+    if reasons[-1:] == ["tp1"]:
+        return "take_profit"
+    if reasons[-1:] == ["trail"]:
+        return "trailing"
+    if reasons[-1:] == ["stop"]:
+        return "stop_loss"
+    if reasons[-1:] == ["time"]:
+        return "time_exit"
+    return reasons[-1] if reasons else "open"
+
+
+def load_trade_history(trade_path: Path, signal_path: Path, limit: int = 100) -> list[dict]:
+    if not trade_path.exists():
+        return []
+    with trade_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    signals = _entry_signals(signal_path)
+    used_signals: set[int] = set()
+    open_trades: list[dict] = []
+    completed: list[dict] = []
+
+    for row in rows:
+        if row.get("action") == "entry":
+            signal = _matching_signal(row, signals, used_signals) or {}
+            entry_order = "limit" if row.get("reason") == "limit" or row.get("note") == "maker" else "market"
+            entry_fee_rate = FEES.maker_rate if entry_order == "limit" else FEES.taker_rate
+            notional = _number(row, "notional")
+            open_trades.append(
+                {
+                    "id": f"{row.get('symbol')}-{row.get('strategy')}-{row.get('ts')}",
+                    "entryTime": int(row.get("ts") or 0),
+                    "strategy": row.get("strategy", ""),
+                    "symbol": row.get("symbol", ""),
+                    "side": row.get("side", ""),
+                    "entryPrice": _number(row, "price"),
+                    "contracts": int(_number(row, "contracts")),
+                    "notional": notional,
+                    "leverage": int(_number(row, "leverage", 1.0)),
+                    "stop": _number(row, "stop"),
+                    "tp1": _number(row, "tp1"),
+                    "entryOrder": entry_order,
+                    "entryFee": notional * entry_fee_rate,
+                    "score": _number(signal, "score"),
+                    "reasons": signal.get("reasons") or [],
+                    "context": signal.get("indicators") or {},
+                    "exitEvents": [],
+                    "closedRatio": 0.0,
+                }
+            )
+            continue
+
+        if row.get("action") != "exit":
+            continue
+        candidates = [
+            trade for trade in open_trades
+            if trade["strategy"] == row.get("strategy")
+            and trade["symbol"] == row.get("symbol")
+            and trade["side"] == row.get("side")
+            and trade["contracts"] == int(_number(row, "contracts"))
+        ]
+        if not candidates:
+            continue
+        trade = candidates[0]
+        ratio = _number(row, "ratio", 1.0)
+        event = {
+            "time": int(row.get("ts") or 0),
+            "reason": row.get("reason") or "exit",
+            "price": _number(row, "price"),
+            "ratio": ratio,
+            "fee": _number(row, "fee"),
+            "pnl": _number(row, "pnl"),
+            "note": row.get("note") or "",
+        }
+        trade["exitEvents"].append(event)
+        trade["closedRatio"] += ratio
+        if trade["closedRatio"] < 0.999999:
+            continue
+
+        events = trade["exitEvents"]
+        ratio_sum = sum(item["ratio"] for item in events) or 1.0
+        trade["exitTime"] = events[-1]["time"]
+        trade["exitPrice"] = sum(item["price"] * item["ratio"] for item in events) / ratio_sum
+        trade["exitMode"] = _exit_mode(events)
+        trade["fees"] = trade["entryFee"] + sum(item["fee"] for item in events)
+        trade["pnl"] = sum(item["pnl"] for item in events) - trade["entryFee"]
+        trade["balanceAfter"] = _number(row, "balance")
+        trade["holdingSeconds"] = max(0, trade["exitTime"] - trade["entryTime"])
+        trade.pop("closedRatio", None)
+        open_trades.remove(trade)
+        completed.append(trade)
+
+    return sorted(completed, key=lambda trade: trade["exitTime"], reverse=True)[:limit]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -170,12 +394,27 @@ def main() -> int:
         type=Path,
         default=Path(__file__).resolve().parents[1] / "public" / "btc-dashboard.json",
     )
+    parser.add_argument(
+        "--trade-file",
+        type=Path,
+        default=ROOT / "data" / "trades.csv",
+    )
+    parser.add_argument(
+        "--signal-file",
+        type=Path,
+        default=ROOT / "data" / "signals.jsonl",
+    )
     args = parser.parse_args()
 
     with httpx.Client(timeout=20.0, headers={"User-Agent": "xrp-paper-bot-dashboard/0.1"}) as client:
         candles_by_tf = {
-            timeframe: enrich(fetch_candles(client, timeframe))
+            timeframe: enrich(fetch_candles(client, timeframe, "BTC_USDT"))
             for timeframe in TIMEFRAMES
+        }
+        xrp_candles_by_tf = {
+            timeframe: enrich(fetch_candles(client, timeframe, "XRP_USDT"))
+            for timeframe in TIMEFRAMES
+            if timeframe != "1m"
         }
 
     state = load_state(args.state_file)
@@ -183,12 +422,28 @@ def main() -> int:
     latest = minute[-1]
     previous = minute[-2]
     change_pct = (latest["close"] / previous["close"] - 1.0) * 100
+    xrp_minute = xrp_candles_by_tf["5m"]
+    xrp_latest = xrp_minute[-1]
+    xrp_previous = xrp_minute[-2]
+    xrp_change_pct = (xrp_latest["close"] / xrp_previous["close"] - 1.0) * 100
 
     positions = [
         position
         for position in state.get("positions", [])
         if position.get("symbol") == "BTC_USDT"
         and position.get("strategy") == "btc_regression_channel"
+    ]
+    positions_25x = [
+        position
+        for position in state.get("positions", [])
+        if position.get("symbol") == "BTC_USDT"
+        and position.get("strategy") == "btc_regime_25x"
+    ]
+    xrp_positions = [
+        position
+        for position in state.get("positions", [])
+        if position.get("symbol") == "XRP_USDT"
+        and str(position.get("strategy", "")).startswith("xrp_patterns.")
     ]
 
     payload = {
@@ -207,6 +462,39 @@ def main() -> int:
             "dayKey": state.get("day_key", ""),
         },
         "positions": positions,
+        "positions25x": positions_25x,
+        "xrpMarket": {
+            "symbol": "XRP_USDT",
+            "displaySymbol": "XRP / USDT",
+            "price": xrp_latest["close"],
+            "changePct": xrp_change_pct,
+        },
+        "xrpPositions": xrp_positions,
+        "xrpCandles": xrp_candles_by_tf,
+        "xrpPatterns": xrp_pattern_monitors(),
+        "xrpSignals": load_signal_events(args.signal_file),
+        "strategy25x": {
+            "channelLength": BTC_REGIME_25X.channel_length,
+            "channelWidthMult": BTC_REGIME_25X.channel_width_mult,
+            "channelR2Min": BTC_REGIME_25X.channel_r2_min,
+            "channelMinMovePct": BTC_REGIME_25X.channel_min_move_pct,
+            "maxEntryDistancePct": BTC_REGIME_25X.max_entry_distance_pct,
+            "limitTtlBars": BTC_REGIME_25X.limit_ttl_bars,
+            "leverage": BTC_REGIME_25X.leverage,
+            "marginFraction": BTC_REGIME_25X.margin_fraction,
+            "accountTakeProfitPct": BTC_REGIME_25X.account_take_profit_pct,
+            "targetMarginRoe": (
+                BTC_REGIME_25X.account_take_profit_pct
+                / BTC_REGIME_25X.margin_fraction
+            ),
+            "makerRate": FEES.maker_rate,
+            "maxDailyEntries": BTC_REGIME_25X.max_daily_entries,
+            "consecutiveLossLimit": BTC_REGIME_25X.consecutive_loss_limit,
+            "dailyEntries": state.get("daily_entries", {}).get("btc_regime_25x", 0),
+            "consecutiveLosses": state.get("consecutive_losses", {}).get("btc_regime_25x", 0),
+            "pausedUntil": state.get("paused_until", {}).get("btc_regime_25x", 0),
+        },
+        "trades": load_trade_history(args.trade_file, args.signal_file),
         "candles": candles_by_tf,
     }
 

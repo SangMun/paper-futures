@@ -17,6 +17,9 @@ import pandas as pd
 
 # 지원 타임프레임과 초 단위 길이. config.symbols.Timeframe과 짝을 맞춘다.
 INTERVAL_SECONDS: dict[str, int] = {
+    # 1분봉은 전략의 진입봉이 아니다. 리플레이에서 실행 시계(틱)를
+    # 재생하는 대용으로만 쓴다 — 5분봉 하나를 5조각으로 나눠 본다.
+    "1m": 60,
     "5m": 300,
     "15m": 900,
     "1h": 3600,

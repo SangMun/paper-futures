@@ -492,6 +492,10 @@ HISTORY_DAYS: dict[str, int] = {
     "1h": 400,      # 9,600봉 -> 상한에 걸려 395일로 잘림
     "15m": 180,     # 17,280봉 -> 98일로 잘림
     "5m": 180,      # 51,840봉 -> 32일로 잘림
+    # 리플레이의 실행 시계 재생용. 전략 진입봉이 아니라 틱 대용이다.
+    # 상한에 걸려 약 6.9일이지만, 틱 검증은 짧은 구간으로 충분하다 —
+    # 봉 경로와 결과가 어긋나는지 보는 게 목적이지 성과 측정이 아니다.
+    "1m": 180,      # 259,200봉 -> 상한으로 크게 잘림
 }
 
 
@@ -517,3 +521,32 @@ DISCORD_TRADE_WEBHOOK_ENV = "DISCORD_TRADE_WEBHOOK_URL"
 DISCORD_BTC_TRADE_WEBHOOK_ENV = "DISCORD_BTC_TRADE_WEBHOOK_URL"
 DISCORD_XRP_TRADE_WEBHOOK_ENV = "DISCORD_XRP_TRADE_WEBHOOK_URL"
 DISCORD_BALANCE_WEBHOOK_ENV = "DISCORD_BALANCE_WEBHOOK_URL"
+
+
+# ---------------------------------------------------------------- 진입 체결
+
+@dataclass(frozen=True)
+class EntryConfig:
+    """시장가 신호를 지정가로 바꿀지.
+
+    XRP 패턴은 대부분 시장가로 들어간다(전략 파일의 order_type 참조).
+    왕복 taker 0.19% vs maker -0.02%, 0.21%p 차이다. 실거래 8건에서
+    수수료로만 명목의 0.15%를 냈고 수수료 전 손익은 +0.008%였다 —
+    체결 방식이 성과를 그대로 결정하는 크기다.
+
+    **기본값은 꺼짐이다.** 켜면 일부 신호가 체결되지 않아 전략의 성격이
+    바뀌고, 지금까지 쌓은 성과 기록과 비교가 끊긴다. tools/compare_tick.py로
+    두 설정을 같은 구간에서 비교한 뒤 켤 것.
+
+    체결되지 않은 신호는 limit_expired로 기록되므로, 체결률이 성과보다
+    먼저 확인해야 할 숫자다. 체결률이 낮으면 손익분기 승률 가정이 무너진다.
+    """
+
+    prefer_maker_entries: bool = False
+
+    # 지정가로 바꾼 주문의 유효 봉 수. 짧게 둔다 — 패턴 신호는 그 자리에서
+    # 유효하고, 오래 걸어 두면 전략이 노린 상황이 이미 지난 뒤 체결된다.
+    maker_entry_ttl_bars: int = 2
+
+
+ENTRY = EntryConfig()

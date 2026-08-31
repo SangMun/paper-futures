@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -621,3 +623,51 @@ def test_대세_국면은_4시간봉을_본다():
     frames = frames_of([1.0 + i * 0.0001 for i in range(300)])
     out = xb.major_regime(frames, frames["5m"].index, xb.LADDER["5m"])
     assert len(out) == 300          # 4h 프레임이 없으면 전부 none
+
+
+def test_리테스트는_돌파_이후_봉으로만_판정한다():
+    """`break_at`에 `as_of - 1`을 넘기면 검사 구간이 돌파 봉 한 줄이 되고,
+    `close < level`이 돌파의 정의와 같아져 항상 참이 된다. 실거래 15건이
+    전부 이 항목을 켰던 원인이다. 리테스트는 돌파 **이후** 봉에서만 성립한다.
+    """
+
+    level = 100.0
+    # 목선을 종가로 하향 이탈한 뒤 되돌림이 전혀 없는 흐름.
+    df = pd.DataFrame({
+        "high":  [102, 101, 98.5, 98.0],
+        "low":   [99, 97, 96, 95],
+        "close": [101, 98, 97, 96],
+    })
+
+    assert cb.close_break(df, 1, level, "short")
+    # 돌파 봉(index 1) 이후 구간에는 되돌림이 없으므로 리테스트 아님.
+    assert not cb.retest_ok(df, 1, 3, level, "short")
+
+    # 되돌아 올라와 목선을 건드렸지만 종가로 회복하지 못하면 리테스트다.
+    retested = df.copy()
+    retested.loc[2, ["high", "close"]] = [100.5, 99.0]
+    assert cb.retest_ok(retested, 1, 3, level, "short")
+
+
+def test_어떤_패턴도_retest_ok를_부르지_않는다():
+    """진입이 돌파 봉 종가에서 일어나므로 그 시점에 리테스트는 존재할 수
+    없다. 되돌림 진입을 만들려면 돌파를 기억해 두는 별도 경로가 필요하다."""
+
+    import inspect
+    from strategies.xrp_patterns import (
+        cup_handle, double_top, head_shoulders, triangle, wedge,
+    )
+
+    for module in (cup_handle, double_top, head_shoulders, triangle, wedge):
+        assert "retest_ok" not in inspect.getsource(module), module.__name__
+
+
+def test_매물벽_판정은_ATR_기준이라_항상_켜지지_않는다():
+    """기준 거리를 종가-레벨 간격으로 두면 돌파 봉에서 거의 0이 되어 어떤
+    벽이든 통과한다. ATR 배수로 재야 '한 봉이 갈 거리'라는 의도가 남는다."""
+
+    assert cb.WALL_CLEARANCE_ATR > 0
+    source = inspect.getsource(cb.assess)
+    assert "WALL_CLEARANCE_ATR" in source
+    # 매물대를 못 찾은 경우(None)를 가점으로 세면 모르는 걸 합격으로 읽는다.
+    assert "nearest_hvn is not None" in source

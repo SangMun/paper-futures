@@ -29,8 +29,23 @@ from indicators.pivots import Pivot, all_pivots, pivot_series
 from strategies.xrp_patterns import base as xb
 
 
-# 판정표 12항목 중 최소 몇 개를 만족해야 하는가.
-MIN_QUALITY = 4
+# 판정표 항목 중 최소 몇 개를 만족해야 하는가.
+#
+# 4에서 3으로 내린 것은 기준을 완화한 것이 아니라 **원래 자리로 되돌린
+# 것이다.** 예전 판정표에는 사실상 항상 켜지는 항목이 둘 있었다 —
+# `retested`(호출 인자가 잘못돼 돌파 봉 자기 자신을 검사했다)와
+# `no_wall_ahead`(기준 거리가 돌파 순간 거의 0이었다). 실거래 15건 전부가
+# 두 항목을 켰다. 그래서 "4개 충족"의 실질은 2개였다.
+#
+# 두 항목을 고친 뒤 2.5년 리플레이(275,241봉, XRP)로 잰 값:
+#   기존 코드 MQ4   547건  +81.9%  낙폭 14.0%
+#   수정 코드 MQ2   548건  +83.8%  낙폭 13.9%   <- 기존과 동일한 문턱
+#   수정 코드 MQ3   540건  +81.1%  낙폭 13.7%
+#   수정 코드 MQ4   489건  +73.6%  낙폭 12.9%
+#   수정 코드 MQ5   409건  +49.4%  낙폭 17.9%
+# 2와 3은 서로 노이즈 범위이고 4 이상은 수익이 확실히 준다. 둘 중 3을 쓰는
+# 이유는 `no_wall_ahead`가 여전히 비교적 쉽게 켜지기 때문이다.
+MIN_QUALITY = 3
 
 # 하위 호환 기본값. 실제 값은 전략 인스턴스의 Timeframes가 정한다.
 # 돌파 재확인용 상위 캔들 / 상위 지지저항 판정용.
@@ -56,6 +71,9 @@ PIVOT_N = 5
 
 # 패턴 하나가 차지할 수 있는 최대 봉 수. 이보다 길면 "최근 구조"가 아니다.
 MAX_PATTERN_BARS = 180
+
+# 돌파 앞쪽 매물벽이 이 ATR 배수보다 멀어야 "진행 공간이 있다"로 본다.
+WALL_CLEARANCE_ATR = 1.0
 
 # 가격이 같다고 볼 허용 오차 (어깨 높이, 두 고점 등).
 LEVEL_TOLERANCE = 0.004
@@ -84,20 +102,6 @@ class PivotView:
         return sorted(recent, key=lambda p: p.index)
 
 
-@dataclass(frozen=True)
-class Breakout:
-    """패턴 완성 판정 결과."""
-
-    confirmed: bool
-    level: float                # 목선 / 추세선 / 림
-    quality: list[str] = field(default_factory=list)
-    retested: bool = False
-
-    @property
-    def score(self) -> float:
-        return float(len(self.quality))
-
-
 def close_break(df: pd.DataFrame, as_of: int, level: float, side: str) -> bool:
     """이번 봉 **종가**가 레벨을 이탈했는가.
 
@@ -120,8 +124,14 @@ def close_break(df: pd.DataFrame, as_of: int, level: float, side: str) -> bool:
 def retest_ok(df: pd.DataFrame, break_at: int, as_of: int, level: float, side: str) -> bool:
     """돌파 후 리테스트에 성공했는가 (패턴 내부로 복귀하지 않음).
 
-    가장 높은 품질의 진입이지만, 리테스트가 아직 없을 수도 있으므로
-    필수 조건이 아니라 가점 항목이다.
+    **현재 어느 패턴도 이 함수를 부르지 않는다.** 진입이 돌파 봉 종가에서
+    일어나므로 그 시점에는 리테스트가 아직 존재할 수 없기 때문이다.
+    이전에는 다섯 패턴이 `break_at=as_of - 1`을 넘겨 호출했는데, 그러면
+    검사 구간이 돌파 봉 한 줄로 좁혀져 `close < level` 조건이 돌파의 정의와
+    같아지고 항상 참이 됐다 — 실거래 15건 전부가 이 항목을 켰다.
+
+    함수 자체는 맞다. 돌파를 기억해 두고 이후 봉에서 되돌림 진입을 판정하는
+    별도 모드를 만들 때 `break_at`에 실제 돌파 봉 인덱스를 넘겨 쓰면 된다.
     """
 
     if as_of <= break_at or break_at < 0:
@@ -225,7 +235,13 @@ def assess(
             if abs(nearest_lvn - close) <= abs(close - level) * 3:
                 hits.append("lvn_ahead")
 
-        # ⑪ 돌파 방향 바로 앞에 큰 반대 매물대가 없는가
+        # ⑪ 돌파 방향 바로 앞에 큰 반대 매물대가 없는가.
+        #
+        # 기준 거리를 종가-레벨 간격으로 두면 안 된다. 돌파 봉에서는 방금
+        # 레벨을 넘은 참이라 그 간격이 거의 0이고, 어떤 벽이든 "충분히 멀다"로
+        # 통과한다. 실측으로 차트패턴 거래 15건 전부가 이 항목을 켰다.
+        # ATR을 쓰면 "한 봉이 갈 만한 거리 안에 벽이 있는가"라는 원래 의도가
+        # 종목·타임프레임과 무관하게 유지된다.
         blocking = [
             x for x in profile.hvn
             if (x < close if side == "short" else x > close)
@@ -233,8 +249,10 @@ def assess(
         nearest_hvn = (
             (max(blocking) if side == "short" else min(blocking)) if blocking else None
         )
-        room = abs(close - level)
-        if nearest_hvn is None or abs(nearest_hvn - close) >= room:
+        atr = xb.atr_at(prepared, as_of, tf)
+        room = atr * WALL_CLEARANCE_ATR
+        # 매물대를 못 찾았으면 모르는 것이지 비어 있는 것이 아니다. 가점하지 않는다.
+        if room > 0 and nearest_hvn is not None and abs(nearest_hvn - close) >= room:
             hits.append("no_wall_ahead")
 
     # ⑧ 상위 타임프레임(1시간봉)의 의미 있는 지지·저항에서 발생했는가.
@@ -243,7 +261,6 @@ def assess(
     if pd.notna(htf) and bool(htf):
         hits.append("htf_level")
 
-    # ⑫ 리테스트 성공 (호출부가 판정해 넘긴다)
     return hits
 
 

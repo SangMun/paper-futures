@@ -266,11 +266,16 @@ def check_exit(
     low: float,
     close: float,
     slippage_rate: float = FEES.slippage_rate,
+    allow_time_exit: bool = True,
 ) -> ExitEvent | None:
     """이번 봉에서 발생한 청산. 없으면 None.
 
     같은 봉에서 손절과 익절이 모두 닿을 수 있다. 봉 안의 순서를 알 수 없으므로
     **손절을 먼저 본다.** 유리한 쪽을 고르면 과거 검증 결과가 실제보다 좋아진다.
+
+    allow_time_exit=False는 실행 시계(틱)에서 쓴다. 시간 손절은 보유 **봉** 수
+    기준이고 bars_held는 봉 시계만 센다. 틱에서도 판정하면 같은 봉 안에서
+    수십 번 평가되어 시간 손절이 봉 경계와 무관하게 터진다.
     """
 
     _validate_side(state.side)
@@ -311,7 +316,11 @@ def check_exit(
             ratio = min(state.plan.partial_ratio, state.remaining_ratio)
             return ExitEvent(EXIT_TP1, state.plan.tp1, ratio)
 
-    if state.plan.time_exit_enabled and state.bars_held >= state.plan.max_hold_bars:
+    if (
+        allow_time_exit
+        and state.plan.time_exit_enabled
+        and state.bars_held >= state.plan.max_hold_bars
+    ):
         fill = close * (1.0 - slippage_rate if long else 1.0 + slippage_rate)
         return ExitEvent(
             EXIT_TIME,
@@ -345,6 +354,73 @@ def process_bar(
         return event
     update_trailing(state, high, low, atr)
     return None
+
+
+def process_tick(
+    state: PositionState,
+    open_: float,
+    high: float,
+    low: float,
+    last: float,
+    atr: float,
+    slippage_rate: float = FEES.slippage_rate,
+) -> ExitEvent | None:
+    """봉 마감을 기다리지 않고 청산을 판정한다.
+
+    넘기는 값은 봉이 아니라 **직전 관측 이후 지나온 구간**이다
+    (`core.live.window_since`가 만든다). 진행 중인 봉의 누적 고저를 그대로
+    넣으면 안 된다. 누적값은 순서 정보를 잃어서, 봉 전반에 찍힌 저점과
+    봉 후반에 올라간 트레일을 비교하게 되고 없던 청산이 생긴다.
+
+    ATR은 **확정봉에서 계산한 값**을 넘긴다. 진행 중인 봉으로 ATR을 구하면
+    같은 시점을 다시 계산할 때 값이 달라져 재현이 불가능해진다.
+
+    process_bar와 같은 순서를 지킨다. 먼저 직전까지 확정된 손절·목표를 보고,
+    청산이 없을 때만 트레일을 갱신한다. 새 손절은 다음 틱부터 유효하다.
+    """
+
+    event = check_exit(
+        state, open_, high, low, last, slippage_rate, allow_time_exit=False
+    )
+    if event is not None:
+        return event
+    update_trailing(state, high, low, atr)
+    return None
+
+
+def check_time_exit(
+    state: PositionState,
+    close: float,
+    slippage_rate: float = FEES.slippage_rate,
+) -> ExitEvent | None:
+    """보유 **봉** 수 한도만 판정한다.
+
+    실행 시계가 이미 전 구간을 감시한 봉에 쓴다. 그 봉의 OHLC로 손절·익절을
+    다시 보면 안 된다 — 봉 안의 순서를 잃어서, 봉 후반에 올라간 트레일과
+    봉 전반의 저가를 비교하게 되고 실제로는 없었던 청산이 생긴다.
+    시간 손절만 봉 시계에 남는 이유는 bars_held가 봉 단위이기 때문이다.
+    """
+
+    _validate_side(state.side)
+    _positive_finite("종가", close)
+    _validate_slippage(slippage_rate)
+    if not isinstance(state.bars_held, int) or state.bars_held < 0:
+        raise ExitError(f"보유 봉 수 범위 오류: {state.bars_held}")
+
+    if not state.plan.time_exit_enabled:
+        return None
+    if state.bars_held < state.plan.max_hold_bars:
+        return None
+
+    fill = close * (
+        1.0 - slippage_rate if state.side == "long" else 1.0 + slippage_rate
+    )
+    return ExitEvent(
+        EXIT_TIME,
+        fill,
+        state.remaining_ratio,
+        note=f"{state.bars_held}봉 경과",
+    )
 
 
 def apply_tp1(state: PositionState, event: ExitEvent) -> None:

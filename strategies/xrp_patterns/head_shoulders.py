@@ -142,8 +142,6 @@ class HeadShoulders:
         profile = cb.profile_at(df, as_of)
         quality = cb.assess(df, prepared, as_of, side, ls.index, neckline, profile, prior_ok, self.tf)
 
-        if cb.retest_ok(df, as_of - 1, as_of, neckline, side):
-            quality.append("retested")
         if len(quality) < cb.MIN_QUALITY:
             return None
 

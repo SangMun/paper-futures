@@ -19,7 +19,7 @@ from typing import Any
 from config.settings import RUNTIME, STATE_PATH
 
 
-STATE_VERSION = 3
+STATE_VERSION = 4
 
 
 @dataclass
@@ -53,6 +53,37 @@ class OpenPosition:
     entry_tf: str = "5m"
     # 마지막으로 반영한 봉의 타임스탬프. 같은 봉을 두 번 세지 않는다.
     last_bar_ts: int = 0
+
+    # --- 실행 시계(틱) ---
+    # 마지막으로 틱 판정을 돌린 시각. 관측·지연 확인용.
+    last_tick_ts: int = 0
+
+    # 틱 시계가 감시 중인 **진행 중 봉**의 시작 시각.
+    #
+    # 이 봉이 마감될 때 봉 시계가 같은 OHLC로 청산을 다시 판정하면 안 된다.
+    # 틱 시계가 봉 후반의 고점으로 트레일을 올려 뒀는데, 마감 후 그 봉의
+    # 저가(트레일이 올라가기 *전*에 찍힌 값)와 새 손절을 비교하게 되어
+    # 실제로는 없었던 청산이 생긴다. 봉 시계는 이 봉에 대해
+    # 보유 봉 수 증가와 시간 손절만 담당한다.
+    ticked_bar_ts: int = 0
+
+    # 마감까지 **전 구간을 틱으로 다 본** 봉의 시작 시각.
+    #
+    # ticked_bar_ts와 다르다. 저건 지금 추적 중인 진행 봉이고, 이건 꼬리까지
+    # 처리를 끝낸 봉이다. 봉 시계는 이 값으로 "내가 손절·익절을 다시 봐야
+    # 하는가"를 판단한다. 틱 수집이 실패한 봉은 이 값이 안 올라가므로
+    # 봉 시계가 평소처럼 전체를 판정한다 — 안전한 쪽으로 무너진다.
+    covered_bar_ts: int = 0
+
+    # 직전 관측 시점의 누적 고저와 가격.
+    #
+    # 이 세 개가 있어야 "직전 관측 이후 실제로 지나온 구간"을 만들 수 있다.
+    # 거래소가 주는 누적 고저를 그대로 쓰면 이미 지나간 극값이 계속 남아
+    # 나중에 올라간 트레일 손절에 잘못 걸린다(core/live.py 참조).
+    # 재시작 후 0이면 다음 관측을 봉 전체로 처리한다 — 보수적인 쪽이다.
+    last_tick_high: float = 0.0
+    last_tick_low: float = 0.0
+    last_tick_price: float = 0.0
 
     bars_held: int = 0
     remaining_ratio: float = 1.0
@@ -104,6 +135,14 @@ class BotState:
             data = dict(data)
             data["version"] = STATE_VERSION
             data.setdefault("daily_entries", {})
+            version = 3
+        if version == 3:
+            # v4는 포지션에 실행 시계 필드(last_tick_ts, ticked_bar_ts)를 더했다.
+            # 둘 다 0이 안전한 기본값이다 — "아직 틱으로 본 적 없음"이라
+            # 다음 봉 마감은 기존대로 봉 시계가 온전히 처리한다.
+            # 계좌 수준 항목은 바뀌지 않았으므로 잔고와 포지션을 그대로 옮긴다.
+            data = dict(data)
+            data["version"] = STATE_VERSION
             version = STATE_VERSION
         if version != STATE_VERSION:
             # 형식이 바뀌면 조용히 넘어가지 않는다. 잘못 해석한 포지션으로

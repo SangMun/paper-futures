@@ -77,6 +77,17 @@ def main() -> int:
         help="계좌 단위 브레이크(일일 손실·연속 손절 정지)를 켠다. "
              "기본은 꺼짐 — 켜면 전략들이 서로의 성과를 오염시킨다.",
     )
+    ap.add_argument(
+        "--ticks",
+        action="store_true",
+        help="실행 시계(틱)를 재생한다. 1분봉을 틱 대용으로 써서 "
+             "봉 마감 전 손절·익절·트레일을 실시간과 같은 경로로 판정한다.",
+    )
+    ap.add_argument(
+        "--tick-tf",
+        default="1m",
+        help="틱 대용 타임프레임 (기본 1m)",
+    )
     args = ap.parse_args()
 
     symbols = tuple(s for s in ACTIVE if not args.symbol or s.contract == args.symbol)
@@ -111,6 +122,8 @@ def main() -> int:
         max_bars=args.bars,
         progress_every=5_000,
         risk=RISK if args.with_brakes else None,
+        ticks=args.ticks,
+        tick_tf=args.tick_tf,
     )
     summarize(result)
     return 0

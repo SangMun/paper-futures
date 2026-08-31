@@ -165,8 +165,6 @@ class Wedge:
         quality = cb.assess(df, prepared, as_of, side, start, level, profile, prior_ok, self.tf)
         quality.append("converging")
 
-        if cb.retest_ok(df, as_of - 1, as_of, level, side):
-            quality.append("retested")
         if len(quality) < cb.MIN_QUALITY:
             return None
 

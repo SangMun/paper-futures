@@ -134,8 +134,6 @@ class Triangle:
             if (side == "long" and close > vah) or (side == "short" and close < val):
                 quality.append("value_area_break")
 
-        if cb.retest_ok(df, as_of - 1, as_of, level, side):
-            quality.append("retested")
         if len(quality) < cb.MIN_QUALITY:
             return None
 

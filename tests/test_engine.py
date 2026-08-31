@@ -206,6 +206,50 @@ def test_v2_상태는_잔고와_포지션을_보존해_v3로_복구한다():
     assert restored.positions[0].entry_tf == "5m"
 
 
+def test_v3_상태는_틱_필드_기본값으로_v4가_된다():
+    """실행 시계 도입 전에 저장된 포지션도 그대로 이어간다.
+
+    두 필드가 0이면 "아직 틱으로 본 적 없음"이라, 다음 봉 마감을
+    봉 시계가 온전히 처리한다. 재시작 직후 청산 판정이 비는 구간이 없다.
+    """
+
+    position = st.OpenPosition(
+        BTC, "long", "legacy", 60_000.0, 10, 2,
+        59_000.0, 62_000.0, 0.5, 1.2, 40, 10.0,
+    )
+    raw = st.BotState(balance=988.95, positions=[position]).to_dict()
+    raw["version"] = 3
+    for field in (
+        "last_tick_ts", "ticked_bar_ts",
+        "last_tick_high", "last_tick_low", "last_tick_price",
+    ):
+        del raw["positions"][0][field]
+
+    restored = st.BotState.from_dict(raw)
+    p = restored.positions[0]
+
+    assert restored.balance == pytest.approx(988.95)
+    assert p.last_tick_ts == 0 and p.ticked_bar_ts == 0
+    assert p.last_tick_high == 0.0 and p.last_tick_low == 0.0
+    assert p.last_tick_price == 0.0
+
+
+def test_v2_상태도_v4까지_한_번에_올라간다():
+    """마이그레이션이 단계별로 이어져야 한다. v2에서 끊기면 잔고를 잃는다."""
+
+    raw = {
+        "version": 2,
+        "balance": 500.0,
+        "day_start_balance": 500.0,
+        "positions": [],
+    }
+
+    restored = st.BotState.from_dict(raw)
+
+    assert restored.balance == pytest.approx(500.0)
+    assert restored.to_dict()["version"] == st.STATE_VERSION == 4
+
+
 def test_깨진_상태는_예외(tmp_path):
     """초기화로 대체하지 않는다. 열려 있던 포지션을 잊는 게 가장 위험하다."""
 
