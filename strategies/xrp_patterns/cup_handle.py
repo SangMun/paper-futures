@@ -148,14 +148,8 @@ class CupHandle:
             return None
 
         # 선행 추세 — 지속 패턴이므로 컵 이전이 같은 방향이어야 한다
-        before = max(0, left.index - 40)
-        prior = df["close"].iloc[before : left.index + 1]
-        prior_ok = bool(
-            len(prior) > 5
-            and (
-                (side == "long" and prior.iloc[-1] > prior.iloc[0])
-                or (side == "short" and prior.iloc[-1] < prior.iloc[0])
-            )
+        prior_ok = cb.prior_trend_ok(
+            df, left.index, "up" if side == "long" else "down", 40
         )
 
         profile = cb.profile_at(df, as_of)

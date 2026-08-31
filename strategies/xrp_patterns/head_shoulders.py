@@ -129,14 +129,8 @@ class HeadShoulders:
             return None
 
         # 선행 추세: 왼쪽 어깨 이전이 패턴 방향과 반대로 진행했는가
-        before = max(0, ls.index - 30)
-        prior = df["close"].iloc[before : ls.index + 1]
-        prior_ok = bool(
-            len(prior) > 5
-            and (
-                (side == "short" and prior.iloc[-1] > prior.iloc[0])
-                or (side == "long" and prior.iloc[-1] < prior.iloc[0])
-            )
+        prior_ok = cb.prior_trend_ok(
+            df, ls.index, "up" if side == "short" else "down", 30
         )
 
         profile = cb.profile_at(df, as_of)

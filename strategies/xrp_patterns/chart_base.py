@@ -121,6 +121,36 @@ def close_break(df: pd.DataFrame, as_of: int, level: float, side: str) -> bool:
     return close > level >= prev
 
 
+def prior_trend_ok(df: pd.DataFrame, start: int, want: str, lookback: int) -> bool:
+    """패턴 시작 이전 구간이 `want`("up"/"down") 방향으로 진행했는가.
+
+    네 패턴이 같은 판정을 각자 복사해 두고 있었다. 무엇을 요구하는지는
+    패턴마다 다르므로(반전형은 반대 추세, 지속형은 같은 추세) 방향을
+    `side`에서 유도하지 않고 호출부가 명시한다.
+
+    **양 끝점 비교로 충분하다 — 기울기 판정은 재보고 버렸다.**
+
+    구간 두 점만 보는 게 허술해 보여 회귀 기울기로 바꿔 봤지만
+    275,241봉 리플레이에서 전부 나빠졌다:
+
+        현행 (양 끝점)            540건  +81.1%  낙폭 13.7%
+        항목 제거                527건  +70.0%  낙폭 14.9%
+        기울기 · 구간이동 0.5%    537건  +74.5%  낙폭 15.8%
+        기울기 · 구간이동 1.5%    530건  +71.0%  낙폭 15.3%
+
+    항목을 아예 빼면 11%p가 날아가므로 판정 자체는 제 몫을 한다. 조이면
+    나빠지는 건 wedge.15m 때문이다(+69.6 -> 기울기 0.5%에서 +27.9). 이
+    전략은 느슨한 선행 추세 조건에서 이익이 나온다.
+    """
+
+    before = max(0, start - lookback)
+    prior = df["close"].iloc[before : start + 1]
+    if len(prior) <= 5:
+        return False
+    first, last = float(prior.iloc[0]), float(prior.iloc[-1])
+    return last > first if want == "up" else last < first
+
+
 def retest_ok(df: pd.DataFrame, break_at: int, as_of: int, level: float, side: str) -> bool:
     """돌파 후 리테스트에 성공했는가 (패턴 내부로 복귀하지 않음).
 

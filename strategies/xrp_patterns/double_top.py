@@ -114,14 +114,9 @@ class DoubleTop:
         if xb.blocked(prepared, as_of, side, self.tf) is not None:
             return None
 
-        before = max(0, first.index - 30)
-        prior = df["close"].iloc[before : first.index + 1]
-        prior_ok = bool(
-            len(prior) > 5
-            and (
-                (side == "short" and prior.iloc[-1] > prior.iloc[0])
-                or (side == "long" and prior.iloc[-1] < prior.iloc[0])
-            )
+        # 반전형 — 이중천장 앞에는 상승이 있어야 뒤집을 것이 있다.
+        prior_ok = cb.prior_trend_ok(
+            df, first.index, "up" if side == "short" else "down", 30
         )
 
         profile = cb.profile_at(df, as_of)
