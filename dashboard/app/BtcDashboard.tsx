@@ -1,22 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import {
   buildLiveStrategy,
+  confirmedPivots,
   enrichCandles,
   mergeRawCandles,
+  TIMEFRAME_SECONDS,
 } from "@/lib/market.mjs";
 import type { StrategyPoint } from "@/lib/market.mjs";
 
-type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
+export type Timeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
 
-type Candle = {
+export type Candle = {
   time: number;
   open: number;
   high: number;
   low: number;
   close: number;
   volume: number;
+  quoteVolume?: number;
   mid: number | null;
   upper: number | null;
   lower: number | null;
@@ -25,20 +29,33 @@ type Candle = {
   ema20: number | null;
   ema60: number | null;
   atr: number | null;
+  rsi14: number | null;
+  macd: number | null;
+  macdSignal: number | null;
+  macdHist: number | null;
+  sma20?: number | null;
+  sma25?: number | null;
+  sma50?: number | null;
+  vwap?: number | null;
+  rvol?: number | null;
+  deviation?: number | null;
+  deviationRank?: number | null;
+  spike?: boolean;
   closed?: boolean;
 };
 
-type LiveStatus = "connecting" | "online" | "stale";
+export type LiveStatus = "connecting" | "online" | "stale";
 
 type LiveResponse = {
   serverTime: number;
   source: string;
   candles: Partial<Record<Timeframe, Candle[]>>;
-  mode?: "live" | "history";
+  mode?: "live" | "history" | "catchup";
+  truncated?: boolean;
   error?: string;
 };
 
-type Position = {
+export type Position = {
   symbol: string;
   side: "long" | "short";
   strategy: string;
@@ -51,7 +68,44 @@ type Position = {
   tp1_filled: boolean;
 };
 
-type DashboardData = {
+type TradeExitEvent = {
+  time: number;
+  reason: string;
+  price: number;
+  ratio: number;
+  fee: number;
+  pnl: number;
+  note: string;
+};
+
+export type TradeRecord = {
+  id: string;
+  entryTime: number;
+  exitTime: number;
+  strategy: string;
+  symbol: string;
+  side: "long" | "short";
+  entryPrice: number;
+  exitPrice: number;
+  contracts: number;
+  notional: number;
+  leverage: number;
+  stop: number;
+  tp1: number;
+  entryOrder: "market" | "limit";
+  score: number;
+  reasons: string[];
+  context: Record<string, unknown>;
+  exitEvents: TradeExitEvent[];
+  exitMode: string;
+  entryFee: number;
+  fees: number;
+  pnl: number;
+  balanceAfter: number;
+  holdingSeconds: number;
+};
+
+export type DashboardData = {
   generatedAt: number;
   source: string;
   market: {
@@ -83,7 +137,64 @@ type DashboardData = {
     dayKey: string;
   };
   positions: Position[];
+  positions25x?: Position[];
+  strategy25x?: {
+    channelLength: number;
+    channelWidthMult: number;
+    channelR2Min: number;
+    channelMinMovePct: number;
+    maxEntryDistancePct: number;
+    limitTtlBars: number;
+    leverage: number;
+    marginFraction: number;
+    accountTakeProfitPct: number;
+    targetMarginRoe: number;
+    makerRate: number;
+    maxDailyEntries: number;
+    consecutiveLossLimit: number;
+    dailyEntries: number;
+    consecutiveLosses: number;
+    pausedUntil: number;
+  };
+  trades?: TradeRecord[];
   candles: Record<Timeframe, Candle[]>;
+  xrpMarket?: {
+    symbol: string;
+    displaySymbol: string;
+    price: number;
+    changePct: number;
+  };
+  xrpPositions?: Position[];
+  xrpCandles?: Record<Exclude<Timeframe, "1m">, Candle[]>;
+  xrpPatterns?: XrpPatternMonitor[];
+  xrpSignals?: XrpSignalEvent[];
+};
+
+export type XrpPatternMonitor = {
+  name: string;
+  family: string;
+  timeframe: "5m" | "15m" | "1h" | "4h";
+  contextTimeframe: "1h" | "4h" | "1d";
+  confirmTimeframe: "15m" | "1h" | "4h" | "1d";
+  orderType: "market" | "limit";
+  trendAlign: boolean;
+  blockedUtcHours: number[];
+};
+
+export type XrpSignalEvent = {
+  time: number;
+  action: "entry" | "skip";
+  strategy: string;
+  side: "long" | "short" | null;
+  skipReason: string | null;
+  entry: number | null;
+  stop: number | null;
+  target: number | null;
+  score: number | null;
+  reasons: string[];
+  indicators: Record<string, unknown>;
+  detail: string | null;
+  notes: string[];
 };
 
 const TIMEFRAMES: { value: Timeframe; label: string }[] = [
@@ -166,7 +277,84 @@ function connectionCopy(status: LiveStatus) {
   return "시세 연결 중";
 }
 
-function RegressionChart({
+function tradePrice(value: number, symbol: string) {
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: symbol.startsWith("XRP") ? 4 : 1,
+    maximumFractionDigits: symbol.startsWith("XRP") ? 4 : 1,
+  }).format(value);
+}
+
+function holdingTime(seconds: number) {
+  if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))}분`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+  return minutes ? `${hours}시간 ${minutes}분` : `${hours}시간`;
+}
+
+function reasonLabel(reason: string) {
+  const fixed: Record<string, string> = {
+    double_top: "쌍봉 천장",
+    double_bottom: "쌍바닥",
+    symmetric_triangle: "대칭 삼각수렴",
+    kotegawa: "코테가와 역추세",
+    break_short: "하단 돌파",
+    break_long: "상단 돌파",
+    prior_trend: "선행 추세 확인",
+    volume_dry_up: "거래량 수축",
+    vwap_aligned: "VWAP 정렬",
+    "15m_confirmed": "15분봉 확인",
+    "4h_confirmed": "4시간봉 확인",
+    btc_aligned: "BTC 방향 일치",
+    no_wall_ahead: "전방 매물벽 없음",
+    lvn_ahead: "LVN 공간 확인",
+    htf_level: "상위봉 레벨",
+    at_value_edge: "가치영역 경계",
+    second_peak_weaker: "두 번째 고점 약화",
+    retested: "리테스트 확인",
+    value_area_break: "가치영역 돌파",
+  };
+  if (fixed[reason]) return fixed[reason];
+  if (reason.startsWith("rvol_")) return `상대 거래량 ${reason.slice(5)}×`;
+  if (reason.startsWith("progress_")) return `패턴 진행도 ${reason.slice(9)}`;
+  if (reason.startsWith("dev_")) return `이평 이격 ${reason.slice(4)}`;
+  if (reason.startsWith("rank_")) return `이격 순위 ${reason.slice(5)}`;
+  return reason.replaceAll("_", " ");
+}
+
+function patternLabel(trade: TradeRecord) {
+  const primary = trade.reasons.find((reason) => [
+    "double_top", "double_bottom", "symmetric_triangle", "kotegawa",
+  ].includes(reason));
+  if (primary) return reasonLabel(primary);
+  if (trade.strategy === "btc_regression_channel") return "BTC 회귀채널 복귀";
+  if (trade.strategy === "btc_regime_25x") return "BTC 25× 단기 국면";
+  return trade.strategy.replace("xrp_patterns.", "").replaceAll("_", " ");
+}
+
+function exitCopy(mode: string) {
+  const copy: Record<string, { label: string; tone: "positive" | "negative" | "neutral" }> = {
+    tp1_trail: { label: "1차 익절 → 트레일링", tone: "positive" },
+    take_profit: { label: "목표가 익절", tone: "positive" },
+    trailing: { label: "트레일링 청산", tone: "positive" },
+    stop_loss: { label: "손절", tone: "negative" },
+    time_exit: { label: "시간 청산", tone: "neutral" },
+  };
+  return copy[mode] ?? { label: mode.replaceAll("_", " "), tone: "neutral" as const };
+}
+
+function eventLabel(reason: string) {
+  if (reason === "tp1") return "1차 익절";
+  if (reason === "trail") return "트레일링 청산";
+  if (reason === "stop") return "손절";
+  if (reason === "time") return "시간 청산";
+  return reason;
+}
+
+// Accumulated pinch deltaY needed for one zoom step; a pinch fires many tiny
+// wheel events and stepping on each one would blow past the whole range.
+const PINCH_ZOOM_STEP = 12;
+
+export function RegressionChart({
   candles,
   timeframe,
   showChannel,
@@ -175,6 +363,12 @@ function RegressionChart({
   historyLoading,
   historyExhausted,
   onLoadOlder,
+  averageMode = "ema20/60",
+  showVwap = false,
+  showPivots = false,
+  instrumentLabel = "비트코인",
+  priceDigits = 1,
+  trades = [],
 }: {
   candles: Candle[];
   timeframe: Timeframe;
@@ -184,15 +378,30 @@ function RegressionChart({
   historyLoading: boolean;
   historyExhausted: boolean;
   onLoadOlder: (timeframe: Timeframe) => void;
+  averageMode?: "ema20/60" | "sma20/50";
+  showVwap?: boolean;
+  showPivots?: boolean;
+  instrumentLabel?: string;
+  priceDigits?: number;
+  trades?: TradeRecord[];
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<{ startX: number; endIndex: number } | null>(null);
+  const wheelPanRef = useRef(0);
+  const pinchZoomRef = useRef(0);
   const [dimensions, setDimensions] = useState({ width: 900, height: 510 });
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [barsVisible, setBarsVisible] = useState(VISIBLE_BARS[timeframe]);
   const [endTime, setEndTime] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
+  const chartPriceFormatter = useMemo(() => new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: priceDigits,
+    maximumFractionDigits: priceDigits,
+  }), [priceDigits]);
+  const formatChartPrice = (value: number | null | undefined) => (
+    value == null ? "—" : `$${chartPriceFormatter.format(value)}`
+  );
 
   const endIndex = useMemo(() => {
     if (endTime == null) return candles.length;
@@ -208,6 +417,34 @@ function RegressionChart({
   );
   const focused = hoverIndex == null ? visible.at(-1) : visible[hoverIndex];
   const followingLive = endTime == null;
+  const visiblePivots = useMemo(() => {
+    if (!showPivots) return [];
+    return confirmedPivots(candles, 5)
+      .filter((pivot) => pivot.index >= startIndex && pivot.index < endIndex)
+      .slice(-24)
+      .map((pivot) => ({ ...pivot, visibleIndex: pivot.index - startIndex }));
+  }, [candles, startIndex, endIndex, showPivots]);
+
+  // Entry ("S") and exit ("F") markers for completed trades that fall inside
+  // the visible window. Long trades are green, short trades red.
+  const visibleMarks = useMemo(() => {
+    if (!trades.length || !visible.length) return [];
+    const firstTime = visible[0].time;
+    const lastTime = visible.at(-1)!.time + TIMEFRAME_SECONDS[timeframe];
+    const locate = (time: number) => {
+      if (time < firstTime || time >= lastTime) return null;
+      for (let index = visible.length - 1; index >= 0; index -= 1) {
+        if (visible[index].time <= time) return index;
+      }
+      return null;
+    };
+    return trades.flatMap((trade) => ([
+      { index: locate(trade.entryTime), price: trade.entryPrice, label: "S", side: trade.side },
+      { index: locate(trade.exitTime), price: trade.exitPrice, label: "F", side: trade.side },
+    ])).filter((mark) => mark.index != null) as {
+      index: number; price: number; label: string; side: "long" | "short";
+    }[];
+  }, [trades, visible, timeframe]);
 
   useEffect(() => {
     const element = wrapRef.current;
@@ -263,9 +500,12 @@ function RegressionChart({
         if (candle.lower != null) extras.push(candle.lower);
       }
       if (showAverages) {
-        if (candle.ema20 != null) extras.push(candle.ema20);
-        if (candle.ema60 != null) extras.push(candle.ema60);
+        const fast = averageMode === "sma20/50" ? candle.sma20 : candle.ema20;
+        const slow = averageMode === "sma20/50" ? candle.sma50 : candle.ema60;
+        if (fast != null) extras.push(fast);
+        if (slow != null) extras.push(slow);
       }
+      if (showVwap && candle.vwap != null) extras.push(candle.vwap);
       return [candle.low, candle.high, ...extras];
     });
     let minPrice = Math.min(...values);
@@ -273,11 +513,19 @@ function RegressionChart({
     const pricePadding = Math.max((maxPrice - minPrice) * 0.08, maxPrice * 0.001);
     minPrice -= pricePadding;
     maxPrice += pricePadding;
-    const range = Math.max(1, maxPrice - minPrice);
-    const maxVolume = Math.max(...visible.map((candle) => candle.volume), 1);
+    // Never impose a one-dollar minimum here: it is harmless for BTC but
+    // compresses a ~$1 XRP market into a single line at the top of the chart.
+    const range = Math.max(Number.EPSILON, maxPrice - minPrice);
+    const displayVolume = (candle: Candle) => candle.quoteVolume ?? candle.volume;
+    const maxVolume = Math.max(...visible.map(displayVolume), 1);
 
     const x = (index: number) => left + stepX * index + stepX / 2;
     const y = (price: number) => top + ((maxPrice - price) / range) * priceHeight;
+    const expectedStep = TIMEFRAME_SECONDS[timeframe];
+    const crossesGap = (previousIndex: number, index: number) => (
+      index !== previousIndex + 1
+      || visible[index].time - visible[previousIndex].time > expectedStep * 1.5
+    );
 
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = "#0c1114";
@@ -295,30 +543,37 @@ function RegressionChart({
       ctx.lineTo(width - right, lineY + 0.5);
       ctx.stroke();
       ctx.fillStyle = "#6e7d83";
-      ctx.fillText(priceFormatter.format(price), width - right + 8, lineY);
+      ctx.fillText(chartPriceFormatter.format(price), width - right + 8, lineY);
     }
 
     if (showChannel) {
       const valid = visible
         .map((candle, index) => ({ candle, index }))
         .filter(({ candle }) => candle.upper != null && candle.lower != null);
-      if (valid.length > 1) {
+      const groups: typeof valid[] = [];
+      valid.forEach((point) => {
+        const group = groups.at(-1);
+        const previousPoint = group?.at(-1);
+        if (!previousPoint || crossesGap(previousPoint.index, point.index)) groups.push([point]);
+        else group.push(point);
+      });
+      groups.filter((group) => group.length > 1).forEach((group) => {
         ctx.beginPath();
-        valid.forEach(({ candle, index }, pointIndex) => {
+        group.forEach(({ candle, index }, pointIndex) => {
           const command = pointIndex === 0 ? "moveTo" : "lineTo";
           ctx[command](x(index), y(candle.upper as number));
         });
-        [...valid].reverse().forEach(({ candle, index }) => {
+        [...group].reverse().forEach(({ candle, index }) => {
           ctx.lineTo(x(index), y(candle.lower as number));
         });
         ctx.closePath();
         ctx.fillStyle = "rgba(91, 229, 217, 0.075)";
         ctx.fill();
-      }
+      });
     }
 
     const drawLine = (
-      key: "upper" | "lower" | "mid" | "ema20" | "ema60",
+      key: "upper" | "lower" | "mid" | "ema20" | "ema60" | "sma20" | "sma50" | "vwap",
       color: string,
       lineWidth = 1,
       dash: number[] = [],
@@ -328,15 +583,21 @@ function RegressionChart({
       ctx.lineWidth = lineWidth;
       ctx.setLineDash(dash);
       let started = false;
+      let previousIndex = -1;
       visible.forEach((candle, index) => {
         const value = candle[key];
-        if (value == null) return;
-        if (!started) {
+        if (value == null) {
+          started = false;
+          previousIndex = -1;
+          return;
+        }
+        if (!started || (previousIndex >= 0 && crossesGap(previousIndex, index))) {
           ctx.moveTo(x(index), y(value));
           started = true;
         } else {
           ctx.lineTo(x(index), y(value));
         }
+        previousIndex = index;
       });
       if (started) ctx.stroke();
       ctx.setLineDash([]);
@@ -367,8 +628,19 @@ function RegressionChart({
       }
     }
     if (showAverages) {
-      drawLine("ema20", "rgba(255, 199, 105, 0.92)", 1.1);
-      drawLine("ema60", "rgba(180, 139, 255, 0.86)", 1.1);
+      drawLine(averageMode === "sma20/50" ? "sma20" : "ema20", "rgba(255, 199, 105, 0.92)", 1.1);
+      drawLine(averageMode === "sma20/50" ? "sma50" : "ema60", "rgba(180, 139, 255, 0.86)", 1.1);
+    }
+    if (showVwap) {
+      drawLine("vwap", "rgba(91, 229, 217, 0.82)", 1, [5, 4]);
+    }
+    if (showPivots) {
+      visiblePivots.forEach((pivot) => {
+        ctx.fillStyle = pivot.kind === "high" ? "#ff6f6b" : "#d5ff63";
+        ctx.beginPath();
+        ctx.arc(x(pivot.visibleIndex), y(pivot.price), 2.4, 0, Math.PI * 2);
+        ctx.fill();
+      });
     }
 
     const lastChannel = visible.at(-1);
@@ -422,10 +694,25 @@ function RegressionChart({
       }
       ctx.globalAlpha = 1;
 
-      const volumeHeight = (candle.volume / maxVolume) * (volumeBottom - volumeTop);
+      const volumeHeight = (displayVolume(candle) / maxVolume) * (volumeBottom - volumeTop);
       ctx.globalAlpha = 0.24;
       ctx.fillRect(center - candleWidth / 2, volumeBottom - volumeHeight, candleWidth, volumeHeight);
       ctx.globalAlpha = 1;
+    });
+
+    visible.forEach((candle, index) => {
+      if (index === 0 || candle.time - visible[index - 1].time <= expectedStep * 1.5) return;
+      const gapX = x(index) - stepX / 2;
+      ctx.strokeStyle = "rgba(255, 199, 105, 0.48)";
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(gapX, top);
+      ctx.lineTo(gapX, volumeBottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(255, 199, 105, 0.78)";
+      ctx.font = "700 8px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.fillText("DATA GAP", gapX + 5, top + 8);
     });
 
     const liveCandle = visible.at(-1);
@@ -444,6 +731,32 @@ function RegressionChart({
       ctx.fillText("LIVE", Math.min(width - right - 2, liveX), top + 8);
       ctx.textAlign = "left";
     }
+
+    visibleMarks.forEach((mark) => {
+      if (mark.price < minPrice || mark.price > maxPrice) return;
+      const color = mark.side === "long" ? "#16a34a" : "#ff6f6b";
+      const tipX = x(mark.index);
+      const tipY = y(mark.price);
+      // Upside-down teardrop: round head with the point resting on the price.
+      const radius = 7.5;
+      const tipDistance = 12;
+      const headY = tipY - tipDistance;
+      const spread = Math.acos(radius / tipDistance);
+      ctx.beginPath();
+      ctx.arc(tipX, headY, radius, Math.PI / 2 + spread, Math.PI / 2 - spread + Math.PI * 2);
+      ctx.lineTo(tipX, tipY);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = "#0c1114";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      ctx.fillStyle = "#0c1114";
+      ctx.font = "700 10px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(mark.label, tipX, headY);
+      ctx.textAlign = "left";
+    });
 
     ctx.strokeStyle = "rgba(148, 169, 177, 0.16)";
     ctx.beginPath();
@@ -478,33 +791,170 @@ function RegressionChart({
       ctx.stroke();
       ctx.setLineDash([]);
     }
-  }, [visible, timeframe, showChannel, showAverages, dimensions, hoverIndex]);
+  }, [visible, visiblePivots, visibleMarks, timeframe, showChannel, showAverages, averageMode, showVwap, showPivots, dimensions, hoverIndex, chartPriceFormatter]);
+
+  const resetToLive = () => {
+    setBarsVisible(Math.min(VISIBLE_BARS[timeframe], candles.length));
+    setEndTime(null);
+    setHoverIndex(null);
+  };
+
+  const viewEndAt = (nextEndIndex: number) => {
+    const minimumEnd = Math.min(barsVisible, candles.length);
+    const clamped = Math.max(minimumEnd, Math.min(candles.length, nextEndIndex));
+    setEndTime(clamped >= candles.length ? null : candles[clamped - 1]?.time ?? null);
+  };
+
+  const zoomBy = (direction: "in" | "out", anchorRatio = 0.5) => {
+    const minimum = Math.min(30, candles.length);
+    const maximum = Math.min(1_500, candles.length);
+    const factor = direction === "in" ? 0.8 : 1.25;
+    const nextBars = Math.max(minimum, Math.min(maximum, Math.round(barsVisible * factor)));
+    if (nextBars === barsVisible || !visible.length) return;
+
+    const anchorIndex = startIndex + Math.floor((visible.length - 1) * anchorRatio);
+    let nextStart = Math.round(anchorIndex - (nextBars - 1) * anchorRatio);
+    nextStart = Math.max(0, Math.min(candles.length - nextBars, nextStart));
+    const nextEnd = nextStart + nextBars;
+    setBarsVisible(nextBars);
+    setEndTime(nextEnd >= candles.length ? null : candles[nextEnd - 1]?.time ?? null);
+    setHoverIndex(null);
+  };
+
+  const panByBars = (olderBy: number) => {
+    viewEndAt(endIndex - olderBy);
+    setHoverIndex(null);
+  };
 
   const handlePointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const left = 16;
     const right = rect.width < 540 ? 54 : 72;
     const chartWidth = rect.width - left - right;
+    if (dragRef.current) {
+      const pixelsPerBar = chartWidth / Math.max(visible.length, 1);
+      const movedBars = Math.round((event.clientX - dragRef.current.startX) / pixelsPerBar);
+      const minimumEnd = Math.min(barsVisible, candles.length);
+      const nextEnd = Math.max(
+        minimumEnd,
+        Math.min(candles.length, dragRef.current.endIndex - movedBars),
+      );
+      setEndTime(nextEnd >= candles.length ? null : candles[nextEnd - 1]?.time ?? null);
+      setHoverIndex(null);
+      return;
+    }
     const relativeX = Math.max(0, Math.min(chartWidth, event.clientX - rect.left - left));
     const index = Math.min(visible.length - 1, Math.floor((relativeX / chartWidth) * visible.length));
     setHoverIndex(index);
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = { startX: event.clientX, endIndex };
+    setDragging(true);
+  };
+
+  const handlePointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    dragRef.current = null;
+    setDragging(false);
+  };
+
+  // Native listener: React registers onWheel passively, so preventDefault there
+  // cannot stop the page scrolling or the browser's horizontal back-swipe.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (event: WheelEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const left = 16;
+      const right = rect.width < 540 ? 54 : 72;
+      const chartWidth = rect.width - left - right;
+      // A trackpad pinch reaches the page as a wheel event with ctrlKey set.
+      if (event.ctrlKey) {
+        event.preventDefault();
+        pinchZoomRef.current += event.deltaY;
+        if (Math.abs(pinchZoomRef.current) < PINCH_ZOOM_STEP) return;
+        const direction = pinchZoomRef.current < 0 ? "in" : "out";
+        pinchZoomRef.current = 0;
+        wheelPanRef.current = 0;
+        const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left - left) / chartWidth));
+        zoomBy(direction, ratio);
+        return;
+      }
+      // Claim every event that carries any horizontal component, before deciding
+      // whether it pans. Chrome commits to its back-swipe on the first
+      // unprevented event of a gesture, and a trackpad swipe opens with a few
+      // tiny deltaX frames where deltaY still dominates — bailing out on those
+      // hands the whole gesture to browser navigation, and preventDefault on the
+      // later frames is then too late.
+      if (event.deltaX !== 0) event.preventDefault();
+      // Pan only while horizontal genuinely dominates, so a swipe's stray deltaY
+      // cannot zoom in and out mid-pan.
+      if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+      const pixelsPerBar = chartWidth / Math.max(visible.length, 1);
+      wheelPanRef.current += event.deltaX / pixelsPerBar;
+      const bars = Math.trunc(wheelPanRef.current);
+      if (!bars) return;
+      wheelPanRef.current -= bars;
+      panByBars(-bars);
+    };
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheel);
+  });
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLCanvasElement>) => {
+    if (event.key === "+" || event.key === "=") zoomBy("in", followingLive ? 1 : 0.5);
+    else if (event.key === "-") zoomBy("out", followingLive ? 1 : 0.5);
+    else if (event.key === "ArrowLeft") panByBars(10);
+    else if (event.key === "ArrowRight") panByBars(-10);
+    else if (event.key === "0") resetToLive();
+    else return;
+    event.preventDefault();
   };
 
   return (
     <div className="chart-wrap" ref={wrapRef}>
       <div className="ohlc-strip" aria-live="polite">
         <span>{focused ? formatKst(focused.time) : "—"}{focused?.closed === false ? " · LIVE" : ""}</span>
-        <span>O <b>{formatPrice(focused?.open)}</b></span>
-        <span>H <b>{formatPrice(focused?.high)}</b></span>
-        <span>L <b>{formatPrice(focused?.low)}</b></span>
-        <span>C <b className={focused && focused.close >= focused.open ? "up" : "down"}>{formatPrice(focused?.close)}</b></span>
+        <span>O <b>{formatChartPrice(focused?.open)}</b></span>
+        <span>H <b>{formatChartPrice(focused?.high)}</b></span>
+        <span>L <b>{formatChartPrice(focused?.low)}</b></span>
+        <span>C <b className={focused && focused.close >= focused.open ? "up" : "down"}>{formatChartPrice(focused?.close)}</b></span>
+      </div>
+      <div className="chart-navigation" aria-label="차트 확대와 이동">
+        <button type="button" onClick={() => zoomBy("out", followingLive ? 1 : 0.5)} aria-label="더 많은 캔들 보기">−</button>
+        <span>{visible.length}봉 <small>/ {candles.length} 로드</small></span>
+        <button type="button" onClick={() => zoomBy("in", followingLive ? 1 : 0.5)} aria-label="캔들 확대">＋</button>
+        <button type="button" className={followingLive ? "active" : ""} onClick={resetToLive}>현재 · 기본</button>
+        <button
+          type="button"
+          onClick={() => onLoadOlder(timeframe)}
+          disabled={historyLoading || historyExhausted}
+        >
+          {historyLoading ? "불러오는 중" : historyExhausted ? "최대 구간" : "과거 +800"}
+        </button>
       </div>
       <canvas
         ref={canvasRef}
+        className={dragging ? "dragging" : ""}
+        tabIndex={0}
+        onPointerDown={handlePointerDown}
         onPointerMove={handlePointer}
-        onPointerLeave={() => setHoverIndex(null)}
-        aria-label={`${timeframe} 비트코인 캔들과 회귀채널 차트`}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onPointerLeave={() => { if (!dragRef.current) setHoverIndex(null); }}
+        onKeyDown={handleKeyDown}
+        aria-label={`${timeframe} ${instrumentLabel} 캔들 차트. 드래그나 두 손가락 좌우 스와이프로 과거를 이동하고 두 손가락 확대 제스처로 확대합니다.`}
       />
+      <div className="chart-range-caption">
+        <span>{visible[0] ? formatKst(visible[0].time) : "—"}</span>
+        <span>{followingLive ? "LIVE FOLLOW" : "HISTORY VIEW"}</span>
+        <span>{visible.at(-1) ? formatKst(visible.at(-1)!.time) : "—"}</span>
+      </div>
     </div>
   );
 }
@@ -529,6 +979,191 @@ function MetricCard({
   );
 }
 
+function MomentumStrip({ candle, timeframe }: { candle: Candle | undefined; timeframe: Timeframe }) {
+  const rsi = candle?.rsi14;
+  const rsiLabel = rsi == null ? "워밍업" : rsi >= 70 ? "과매수" : rsi <= 30 ? "과매도" : "중립";
+  const macdLabel = candle?.macd == null || candle.macdSignal == null
+    ? "워밍업"
+    : candle.macd > candle.macdSignal ? "상승 모멘텀" : "하락 모멘텀";
+  const atrPct = candle?.atr != null && candle.close
+    ? candle.atr / candle.close * 100
+    : null;
+
+  return (
+    <div className="momentum-strip" aria-label={`${timeframe} 보조 지표`}>
+      <div className="momentum-heading">
+        <span>MOMENTUM / {timeframe.toUpperCase()}</span>
+        <small>보조 확인용 · 진입 조건에는 미반영</small>
+      </div>
+      <div className="rsi-meter">
+        <div><span>RSI 14</span><strong>{rsi == null ? "—" : rsi.toFixed(1)}</strong><em>{rsiLabel}</em></div>
+        <div className="rsi-track" aria-hidden="true">
+          <i className="rsi-low" /><i className="rsi-mid" /><i className="rsi-high" />
+          {rsi != null && <b style={{ left: `${Math.max(0, Math.min(100, rsi))}%` }} />}
+        </div>
+      </div>
+      <div className="momentum-value">
+        <span>MACD 12·26·9</span>
+        <strong>{candle?.macd == null ? "—" : candle.macd.toFixed(1)}</strong>
+        <small>{macdLabel}</small>
+      </div>
+      <div className="momentum-value">
+        <span>SIGNAL</span>
+        <strong>{candle?.macdSignal == null ? "—" : candle.macdSignal.toFixed(1)}</strong>
+        <small>시그널 EMA 9</small>
+      </div>
+      <div className={`momentum-value ${(candle?.macdHist ?? 0) >= 0 ? "positive" : "negative"}`}>
+        <span>HISTOGRAM</span>
+        <strong>{candle?.macdHist == null ? "—" : candle.macdHist.toFixed(1)}</strong>
+        <small>MACD − SIGNAL</small>
+      </div>
+      <div className="momentum-value">
+        <span>ATR 14 / PRICE</span>
+        <strong>{atrPct == null ? "—" : `${atrPct.toFixed(2)}%`}</strong>
+        <small>현재 변동성</small>
+      </div>
+    </div>
+  );
+}
+
+export function TradeHistory({
+  trades,
+  generatedAt,
+  initialSymbol = "all",
+}: {
+  trades: TradeRecord[];
+  generatedAt: number;
+  initialSymbol?: "all" | "BTC" | "XRP";
+}) {
+  const [symbolFilter, setSymbolFilter] = useState<"all" | "BTC" | "XRP">(initialSymbol);
+  const [exitFilter, setExitFilter] = useState<"all" | "profit" | "stop" | "time">("all");
+  const [expandedId, setExpandedId] = useState<string | null>(trades[0]?.id ?? null);
+  const visible = useMemo(() => trades.filter((trade) => {
+    if (symbolFilter !== "all" && !trade.symbol.startsWith(symbolFilter)) return false;
+    if (exitFilter === "profit" && !["tp1_trail", "take_profit", "trailing"].includes(trade.exitMode)) return false;
+    if (exitFilter === "stop" && trade.exitMode !== "stop_loss") return false;
+    if (exitFilter === "time" && trade.exitMode !== "time_exit") return false;
+    return true;
+  }), [trades, symbolFilter, exitFilter]);
+  const wins = visible.filter((trade) => trade.pnl > 0).length;
+  const totalPnl = visible.reduce((sum, trade) => sum + trade.pnl, 0);
+  const totalFees = visible.reduce((sum, trade) => sum + trade.fees, 0);
+
+  return (
+    <section className="trade-history-section">
+      <div className="section-heading trade-history-heading">
+        <div><span>EXECUTION / JOURNAL</span><h2>거래내역</h2></div>
+        <p>AWS 페이퍼 실행 로그 · {formatKst(generatedAt)} 동기화</p>
+      </div>
+
+      <div className="trade-summary-grid">
+        <div><span>완료 거래</span><strong>{visible.length}건</strong><small>부분익절은 한 거래로 합산</small></div>
+        <div><span>승률</span><strong>{visible.length ? `${(wins / visible.length * 100).toFixed(1)}%` : "—"}</strong><small>{wins}승 · {visible.length - wins}패</small></div>
+        <div className={totalPnl >= 0 ? "positive" : "negative"}><span>수수료 포함 손익</span><strong>{totalPnl >= 0 ? "+" : ""}{totalPnl.toFixed(2)} USDT</strong><small>진입 비용까지 포함</small></div>
+        <div><span>체결 비용</span><strong>{totalFees >= 0 ? "+" : ""}{totalFees.toFixed(2)} USDT</strong><small>음수는 메이커 리베이트</small></div>
+      </div>
+
+      <article className="panel trade-journal">
+        <header className="trade-filterbar">
+          <div className="trade-filter-group" aria-label="종목 필터">
+            {(["all", "BTC", "XRP"] as const).map((value) => (
+              <button key={value} type="button" className={symbolFilter === value ? "active" : ""} onClick={() => setSymbolFilter(value)}>
+                {value === "all" ? "전체 종목" : value}
+              </button>
+            ))}
+          </div>
+          <div className="trade-filter-group result" aria-label="청산 방식 필터">
+            {([
+              ["all", "전체 결과"], ["profit", "익절"], ["stop", "손절"], ["time", "시간청산"],
+            ] as const).map(([value, label]) => (
+              <button key={value} type="button" className={exitFilter === value ? "active" : ""} onClick={() => setExitFilter(value)}>{label}</button>
+            ))}
+          </div>
+        </header>
+
+        {visible.length === 0 ? (
+          <div className="trade-empty">
+            <strong>이 조건에 해당하는 완료 거래가 없습니다</strong>
+            <p>새 거래가 최종 청산되면 진입 근거와 체결 과정까지 이곳에 기록됩니다.</p>
+          </div>
+        ) : (
+          <div className="trade-list">
+            {visible.map((trade) => {
+              const expanded = expandedId === trade.id;
+              const exit = exitCopy(trade.exitMode);
+              const margin = trade.notional / Math.max(1, trade.leverage);
+              const roe = margin ? trade.pnl / margin * 100 : 0;
+              const rsi = typeof trade.context.rsi === "number" ? trade.context.rsi : null;
+              return (
+                <article key={trade.id} className={`trade-record ${expanded ? "expanded" : ""}`}>
+                  <button
+                    type="button"
+                    className="trade-record-summary"
+                    aria-expanded={expanded}
+                    onClick={() => setExpandedId(expanded ? null : trade.id)}
+                  >
+                    <span className="trade-record-time">{formatKst(trade.exitTime)}<small>{holdingTime(trade.holdingSeconds)} 보유</small></span>
+                    <span className="trade-record-symbol"><b>{trade.symbol.replace("_", " / ")}</b><small>{trade.leverage}× · {trade.entryOrder === "limit" ? "지정가" : "시장가"}</small></span>
+                    <span className="trade-record-setup">
+                      <span className={`side-chip ${trade.side}`}>{trade.side.toUpperCase()}</span>
+                      <span className="trade-record-pattern"><b>{patternLabel(trade)}</b><small>{trade.strategy}</small></span>
+                    </span>
+                    <span className={`exit-badge ${exit.tone}`}>{exit.label}</span>
+                    <span className={`trade-record-pnl ${trade.pnl >= 0 ? "up" : "down"}`}>
+                      <b>{trade.pnl >= 0 ? "+" : ""}{trade.pnl.toFixed(2)} USDT</b>
+                      <small>{formatPercent(roe)}</small>
+                    </span>
+                    <span className="trade-expand-mark">{expanded ? "−" : "+"}</span>
+                  </button>
+
+                  {expanded && (
+                    <div className="trade-record-detail">
+                      <div className="trade-decision">
+                        <div className="trade-detail-title">
+                          <div><span>ENTRY DECISION</span><strong>{patternLabel(trade)} 신호로 {trade.side === "long" ? "롱" : "숏"} 진입</strong></div>
+                          <div><span>판정 점수</span><b>{trade.score ? `${trade.score.toFixed(1)}점` : "—"}</b></div>
+                        </div>
+                        <div className="reason-chips">
+                          {trade.reasons.length
+                            ? trade.reasons.map((reason) => <span key={reason}>{reasonLabel(reason)}</span>)
+                            : <span>기록된 세부 근거 없음</span>}
+                        </div>
+                        {rsi != null && <p>진입 당시 RSI <b>{rsi.toFixed(1)}</b> · 손절 {tradePrice(trade.stop, trade.symbol)} · 1차 목표 {tradePrice(trade.tp1, trade.symbol)}</p>}
+                      </div>
+
+                      <div className="execution-path">
+                        <div className="execution-step entry">
+                          <i>IN</i><span>진입</span><strong>{tradePrice(trade.entryPrice, trade.symbol)}</strong>
+                          <small>{formatKst(trade.entryTime)} · {trade.entryOrder === "limit" ? "메이커 지정가" : "테이커 시장가"}</small>
+                        </div>
+                        {trade.exitEvents.map((event, index) => (
+                          <div key={`${event.time}-${index}`} className={`execution-step ${event.reason}`}>
+                            <i>{event.reason === "tp1" ? "½" : "OUT"}</i>
+                            <span>{eventLabel(event.reason)}</span>
+                            <strong>{tradePrice(event.price, trade.symbol)}</strong>
+                            <small>{Math.round(event.ratio * 100)}% · {event.pnl >= 0 ? "+" : ""}{event.pnl.toFixed(2)} USDT{event.note ? ` · ${event.note}` : ""}</small>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="trade-number-grid">
+                        <div><span>평균 청산가</span><b>{tradePrice(trade.exitPrice, trade.symbol)}</b></div>
+                        <div><span>계약 / 명목</span><b>{trade.contracts.toLocaleString()} / {balanceFormatter.format(trade.notional)} USDT</b></div>
+                        <div><span>수수료·리베이트</span><b>{trade.fees >= 0 ? "+" : ""}{trade.fees.toFixed(4)} USDT</b></div>
+                        <div><span>청산 후 잔고</span><b>{balanceFormatter.format(trade.balanceAfter)} USDT</b></div>
+                      </div>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </article>
+    </section>
+  );
+}
+
 export function BtcDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [liveCandles, setLiveCandles] = useState<Record<Timeframe, Candle[]> | null>(null);
@@ -536,12 +1171,79 @@ export function BtcDashboard() {
   const [timeframe, setTimeframe] = useState<Timeframe>("1h");
   const [showChannel, setShowChannel] = useState(true);
   const [showAverages, setShowAverages] = useState(false);
+  const [showMomentum, setShowMomentum] = useState(true);
   const [liveStatus, setLiveStatus] = useState<LiveStatus>("connecting");
   const [lastUpdate, setLastUpdate] = useState<number | null>(null);
   const [frozenSignal, setFrozenSignal] = useState<(StrategyPoint & { detectedAt: number }) | null>(null);
+  const [chartExpanded, setChartExpanded] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState<Partial<Record<Timeframe, boolean>>>({});
+  const [historyExhausted, setHistoryExhausted] = useState<Partial<Record<Timeframe, boolean>>>({});
+  const liveCandlesRef = useRef(liveCandles);
+  const historyInFlight = useRef(new Set<Timeframe>());
   const liveReady = liveCandles !== null;
 
   useEffect(() => {
+    liveCandlesRef.current = liveCandles;
+  }, [liveCandles]);
+
+  const loadOlder = useCallback(async (target: Timeframe) => {
+    if (historyInFlight.current.has(target)) return;
+    const current = liveCandlesRef.current?.[target];
+    if (!current?.length || current.length >= 5_000) {
+      setHistoryExhausted((previous) => ({ ...previous, [target]: true }));
+      return;
+    }
+
+    historyInFlight.current.add(target);
+    setHistoryLoading((previous) => ({ ...previous, [target]: true }));
+    try {
+      const before = current[0].time;
+      const response = await fetch(
+        `/api/btc-live?tf=${target}&before=${before}&limit=800`,
+        { cache: "no-store" },
+      );
+      const payload = await response.json() as LiveResponse;
+      if (!response.ok) throw new Error(payload.error ?? "과거 캔들 요청 실패");
+      const updates = payload.candles[target] ?? [];
+      const older = updates.filter((candle) => candle.time < before);
+      if (!older.length) {
+        setHistoryExhausted((previous) => ({ ...previous, [target]: true }));
+        return;
+      }
+      const existingTimes = new Set(current.map((candle) => candle.time));
+      const addedCount = older.filter((candle) => !existingTimes.has(candle.time)).length;
+      if (current.length + addedCount >= 5_000) {
+        setHistoryExhausted((previous) => ({ ...previous, [target]: true }));
+      }
+      setLiveCandles((previous) => {
+        if (!previous) return previous;
+        const merged = enrichCandles(mergeRawCandles(previous[target], older, 5_000), 100, 2, target);
+        return { ...previous, [target]: merged };
+      });
+    } catch {
+      // 일시적인 네트워크 실패는 다음 이동/버튼 입력에서 다시 시도한다.
+    } finally {
+      historyInFlight.current.delete(target);
+      setHistoryLoading((previous) => ({ ...previous, [target]: false }));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!chartExpanded) return;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setChartExpanded(false);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [chartExpanded]);
+
+  useEffect(() => {
+    let disposed = false;
     fetch("/btc-dashboard.json")
       .then((response) => {
         if (!response.ok) throw new Error("대시보드 데이터를 읽지 못했습니다.");
@@ -552,12 +1254,37 @@ export function BtcDashboard() {
         for (const item of TIMEFRAMES) {
           initial[item.value] = enrichCandles(
             snapshot.candles[item.value].map((candle) => ({ ...candle, closed: true })),
+            100,
+            2,
+            item.value,
           );
         }
+        if (disposed) return;
         setData(snapshot);
         setLiveCandles(initial);
+
+        void Promise.allSettled(TIMEFRAMES.map(async ({ value: target }) => {
+          const after = initial[target].at(-1)?.time;
+          if (after == null) return;
+          const response = await fetch(`/api/btc-live?tf=${target}&after=${after}`, { cache: "no-store" });
+          const payload = await response.json() as LiveResponse;
+          if (!response.ok) throw new Error(payload.error ?? "누락 캔들 요청 실패");
+          const updates = payload.candles[target] ?? [];
+          if (disposed || !updates.length) return;
+          setLiveCandles((previous) => {
+            if (!previous) return previous;
+            const raw = payload.truncated
+              ? updates
+              : mergeRawCandles(previous[target], updates, 5_000);
+            return {
+              ...previous,
+              [target]: enrichCandles(raw, 100, 2, target),
+            };
+          });
+        }));
       })
       .catch((reason: Error) => setError(reason.message));
+    return () => { disposed = true; };
   }, []);
 
   useEffect(() => {
@@ -577,7 +1304,7 @@ export function BtcDashboard() {
           for (const [key, updates] of Object.entries(payload.candles)) {
             const tf = key as Timeframe;
             if (!updates?.length || !next[tf]) continue;
-            next[tf] = enrichCandles(mergeRawCandles(next[tf], updates));
+            next[tf] = enrichCandles(mergeRawCandles(next[tf], updates), 100, 2, tf);
           }
           return next;
         });
@@ -615,6 +1342,11 @@ export function BtcDashboard() {
     return () => clearTimeout(timer);
   }, [strategyView]);
 
+  const chartTrades = useMemo(
+    () => (data?.trades ?? []).filter((trade) => trade.symbol.startsWith("BTC")),
+    [data?.trades],
+  );
+
   if (error) {
     return <main className="center-state"><p>{error}</p></main>;
   }
@@ -643,6 +1375,7 @@ export function BtcDashboard() {
   const channelDirection = (liveStrategy.slope ?? 0) < 0 ? "하방" : "상방";
   const channelQuality = (liveStrategy.r2 ?? 0) >= 0.7 ? "강함" : (liveStrategy.r2 ?? 0) >= 0.4 ? "보통" : "약함";
   const signalIsFrozen = frozenSignal?.candleTime === liveStrategy.candleTime;
+  const selectedMomentum = liveCandles[timeframe].at(-1);
 
   return (
     <main className="app-shell">
@@ -655,9 +1388,9 @@ export function BtcDashboard() {
           </div>
         </div>
         <nav className="strategy-nav" aria-label="전략 메뉴">
-          <button className="nav-item active" type="button">BTC 회귀채널</button>
-          <button className="nav-item disabled" type="button" disabled>BTC 25×</button>
-          <button className="nav-item disabled" type="button" disabled>XRP 패턴</button>
+          <Link className="nav-item active" href="/">BTC 회귀채널</Link>
+          <Link className="nav-item" href="/btc-25x">BTC 25×</Link>
+          <Link className="nav-item" href="/xrp-patterns">XRP 패턴</Link>
         </nav>
         <div className="system-status">
           <span className={`status-dot ${liveStatus}`} />
@@ -682,7 +1415,7 @@ export function BtcDashboard() {
       </section>
 
       <section className="workspace-grid">
-        <article className="panel chart-panel">
+        <article className={`panel chart-panel ${chartExpanded ? "expanded" : ""}`}>
           <div className="panel-header chart-toolbar">
             <div className="timeframe-tabs" role="tablist" aria-label="캔들 시간봉 선택">
               {TIMEFRAMES.map((item) => (
@@ -715,20 +1448,43 @@ export function BtcDashboard() {
               >
                 <i /> EMA 20 / 60
               </button>
+              <button
+                type="button"
+                className={showMomentum ? "active momentum" : ""}
+                aria-pressed={showMomentum}
+                onClick={() => setShowMomentum((value) => !value)}
+              >
+                <i /> RSI / MACD
+              </button>
+              <button
+                type="button"
+                className="screen-toggle"
+                aria-pressed={chartExpanded}
+                onClick={() => setChartExpanded((value) => !value)}
+              >
+                {chartExpanded ? "화면 축소" : "화면 확대"}
+              </button>
             </div>
           </div>
           <RegressionChart
+            key={timeframe}
             candles={liveCandles[timeframe]}
             timeframe={timeframe}
             showChannel={showChannel}
             showAverages={showAverages}
+            expanded={chartExpanded}
+            historyLoading={historyLoading[timeframe] === true}
+            historyExhausted={historyExhausted[timeframe] === true}
+            onLoadOlder={loadOlder}
+            trades={chartTrades}
           />
+          {showMomentum && <MomentumStrip candle={selectedMomentum} timeframe={timeframe} />}
           <footer className="chart-footer">
             <span><i className="legend-candle up" /> 상승</span>
             <span><i className="legend-candle down" /> 하락</span>
             <span><i className="legend-line channel" /> 회귀 상·하단</span>
             <span><i className="legend-line live" /> 진행 중 계산</span>
-            <span className="chart-note">최근 <b>99개 확정봉 + 현재 1시간봉</b>으로 LIVE 채널 계산</span>
+            <span className="chart-note"><b>연속 100봉 기준 · 결측 자동 보정</b> · 드래그·두 손가락 스와이프 이동 · 핀치 확대 · 최대 5,000봉</span>
           </footer>
         </article>
 
@@ -859,6 +1615,8 @@ export function BtcDashboard() {
           )}
         </article>
       </section>
+
+      <TradeHistory trades={data.trades ?? []} generatedAt={data.generatedAt} />
 
       <footer className="page-footer">
         <span>DATA · {liveStatus === "online" ? "Gate.io live public candles" : data.source}</span>
