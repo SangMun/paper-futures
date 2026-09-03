@@ -1920,7 +1920,8 @@ def build_strategies() -> dict[str, list]:
             # 유일하게 플러스였다. 1시간봉은 -0.89%로 반대.
             # 대세 역행을 막는다 — 상승장 숏 -38.0, 하락장 롱 -62.4가
             # 손실의 전부였고 추세 방향은 양쪽 다 플러스였다.
-            HeadShoulders("5m", trend_align=True),
+            # 숏에서 btc_aligned 품질 항목을 뺀다 — EXP-013.
+            HeadShoulders("5m", trend_align=True, drop_short_btc_alignment=True),
 
             # 이격도 역추세 — 1시간봉이 양 종목에서 유의(+0.56%).
             # 4시간봉 국면 'none' 중 두 이평선이 붙어 있으면(진짜 방향

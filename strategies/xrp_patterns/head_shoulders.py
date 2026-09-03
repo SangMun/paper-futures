@@ -44,6 +44,7 @@ class HeadShoulders:
         timeframe: str = "5m",
         symbol: str = "XRP_USDT",
         trend_align: bool = False,
+        drop_short_btc_alignment: bool = False,
     ):
         self.symbol = symbol
         # 대세(4시간봉)와 반대 방향을 막을지.
@@ -51,6 +52,18 @@ class HeadShoulders:
         # (추세 방향은 상승장 롱 +35.5 / 하락장 숏 +34.5로 플러스),
         # 앞뒤 절반 모두 마이너스라 구간 우연이 아니다.
         self.trend_align = trend_align
+        # 숏에서 btc_aligned 품질 항목을 뺄지 (EXP-013).
+        #
+        # btc_aligned는 "BTC 1시간봉이 같은 방향으로 크게 움직였다"는 확인
+        # 항목이다. 실측(BTC 23,065봉)으로 -1% 트리거 뒤 24시간 수익률
+        # 평균 +0.70%, 반등 확률 58% — 급락은 확인이 아니라 반등의 전조에
+        # 가까웠다. 누적 하락(4~12봉)으로 재도, BTC 자체 국면(bull/bear)으로
+        # 걸러도 반등은 사라지지 않았다. 그래서 재정의가 아니라 제거를
+        # 택한다. 실제로 head_shoulders 숏 22건을 btc_aligned 유무로
+        # 가르면 켜진 쪽 11건은 -61.1(승률 36%), 꺼진 쪽 11건은 -0.4였다.
+        # 롱에서는 반대로 무해했다(+3.5)— BTC 급등 뒤엔 그런 반등이 없어서
+        # (조정 확률 48%), 롱만 그대로 둔다.
+        self.drop_short_btc_alignment = drop_short_btc_alignment
         self.tf = xb.LADDER[timeframe]
         # 태그에 봉을 붙인다. 같은 패턴도 봉마다 성과가 달라
         # 따로 집계해야 한다 (실측: double_top 5분 -0.21%, 1시간 +0.40%).
@@ -135,6 +148,8 @@ class HeadShoulders:
 
         profile = cb.profile_at(df, as_of)
         quality = cb.assess(df, prepared, as_of, side, ls.index, neckline, profile, prior_ok, self.tf)
+        if self.drop_short_btc_alignment and side == "short":
+            quality = [item for item in quality if item != "btc_aligned"]
 
         if len(quality) < cb.MIN_QUALITY:
             return None
