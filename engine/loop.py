@@ -1888,7 +1888,8 @@ def build_strategies() -> dict[str, list]:
             # 이중천장 — 1시간봉만. 949일 실측에서 유일하게 유의했고
             # (+0.40%, t=2.41), 리플레이에서도 +33.82(승률 69%)로 최상위다.
             # 4시간봉은 22건뿐이라 판단이 서지 않아 뺀다.
-            DoubleTop("1h"),
+            # 롱에서 vwap_aligned 품질 항목을 뺀다 — EXP-014.
+            DoubleTop("1h", drop_long_vwap_alignment=True),
 
             # 쐐기 — 5분·15분봉. 949일 전체로는 유의하지 않지만
             # 지정가 전환 시 +0.12%/+0.30%로 개선됐다.
@@ -1897,9 +1898,10 @@ def build_strategies() -> dict[str, list]:
             # 5분봉: 대세 역행 차단 + 추세선 지정가 + 16~24시 UTC 차단.
             # 세 조건 모두 앞뒤 절반에서 일관됐다 (지정가+16시이전 99건,
             # 앞 +0.379% / 뒤 +0.212%). 15분봉은 전 국면 플러스라 그대로 둔다.
+            # 롱에서 vwap_aligned 품질 항목을 뺀다 — EXP-014.
             Wedge("5m", trend_align=True, limit_entry=True,
-                  block_hours=tuple(range(16, 24))),
-            Wedge("15m"),
+                  block_hours=tuple(range(16, 24)), drop_long_vwap_alignment=True),
+            Wedge("15m", drop_long_vwap_alignment=True),
 
             # 삼각수렴 — **비활성**. 949일에서 -130.24.
             #
@@ -1921,7 +1923,11 @@ def build_strategies() -> dict[str, list]:
             # 대세 역행을 막는다 — 상승장 숏 -38.0, 하락장 롱 -62.4가
             # 손실의 전부였고 추세 방향은 양쪽 다 플러스였다.
             # 숏에서 btc_aligned 품질 항목을 뺀다 — EXP-013.
-            HeadShoulders("5m", trend_align=True, drop_short_btc_alignment=True),
+            # 롱에서 vwap_aligned 품질 항목을 뺀다 — EXP-014.
+            HeadShoulders(
+                "5m", trend_align=True,
+                drop_short_btc_alignment=True, drop_long_vwap_alignment=True,
+            ),
 
             # 이격도 역추세 — 1시간봉이 양 종목에서 유의(+0.56%).
             # 4시간봉 국면 'none' 중 두 이평선이 붙어 있으면(진짜 방향

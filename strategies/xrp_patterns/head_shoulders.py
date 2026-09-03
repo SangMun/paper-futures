@@ -45,6 +45,7 @@ class HeadShoulders:
         symbol: str = "XRP_USDT",
         trend_align: bool = False,
         drop_short_btc_alignment: bool = False,
+        drop_long_vwap_alignment: bool = False,
     ):
         self.symbol = symbol
         # 대세(4시간봉)와 반대 방향을 막을지.
@@ -64,6 +65,18 @@ class HeadShoulders:
         # 롱에서는 반대로 무해했다(+3.5)— BTC 급등 뒤엔 그런 반등이 없어서
         # (조정 확률 48%), 롱만 그대로 둔다.
         self.drop_short_btc_alignment = drop_short_btc_alignment
+        # 롱에서 vwap_aligned 품질 항목을 뺄지 (EXP-014).
+        #
+        # vwap_aligned는 "종가가 세션 VWAP 기준으로 방향과 같은 쪽에
+        # 있다"는 확인이다. XRP 5m/15m/1h 전체에서 종가가 VWAP 위인
+        # 기본 비율은 51.4%로 쏠려 있지 않지만, 패턴이 완성되는 시점만
+        # 보면 다르다 — 바닥형(롱)은 방금 반등한 자리라 VWAP 위로 올라선
+        # 것 자체가 거의 자동으로 따라오는 반면, 천장형(숏)이 VWAP 아래로
+        # 종가를 내리는 건 더 드물고 결정적인 사건에 가깝다. 실측으로
+        # head_shoulders·double_top·wedge·cup_handle 네 패턴 전부에서
+        # 롱의 vwap_aligned가 숏보다 일관되게 나빴다(220건 합산: 숏 +64.8
+        # / 롱 -125.7).
+        self.drop_long_vwap_alignment = drop_long_vwap_alignment
         self.tf = xb.LADDER[timeframe]
         # 태그에 봉을 붙인다. 같은 패턴도 봉마다 성과가 달라
         # 따로 집계해야 한다 (실측: double_top 5분 -0.21%, 1시간 +0.40%).
@@ -150,6 +163,8 @@ class HeadShoulders:
         quality = cb.assess(df, prepared, as_of, side, ls.index, neckline, profile, prior_ok, self.tf)
         if self.drop_short_btc_alignment and side == "short":
             quality = [item for item in quality if item != "btc_aligned"]
+        if self.drop_long_vwap_alignment and side == "long":
+            quality = [item for item in quality if item != "vwap_aligned"]
 
         if len(quality) < cb.MIN_QUALITY:
             return None

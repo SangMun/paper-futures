@@ -43,8 +43,16 @@ MIN_DEPTH = 0.006
 class DoubleTop:
     """두 고점(저점) + 목선 종가 돌파."""
 
-    def __init__(self, timeframe: str = "5m", symbol: str = "XRP_USDT"):
+    def __init__(
+        self,
+        timeframe: str = "5m",
+        symbol: str = "XRP_USDT",
+        drop_long_vwap_alignment: bool = False,
+    ):
         self.symbol = symbol
+        # 롱(double_bottom)에서 vwap_aligned 품질 항목을 뺄지.
+        # head_shoulders.py의 같은 이름 필드 docstring 참고 — EXP-014.
+        self.drop_long_vwap_alignment = drop_long_vwap_alignment
         self.tf = xb.LADDER[timeframe]
         # 태그에 봉을 붙인다. 같은 패턴도 봉마다 성과가 달라
         # 따로 집계해야 한다 (실측: double_top 5분 -0.21%, 1시간 +0.40%).
@@ -127,6 +135,8 @@ class DoubleTop:
         v2 = float(df["volume"].iloc[second.index])
         if v1 > 0 and v2 < v1:
             quality.append("second_peak_weaker")
+        if self.drop_long_vwap_alignment and side == "long":
+            quality = [item for item in quality if item != "vwap_aligned"]
 
         if len(quality) < cb.MIN_QUALITY:
             return None

@@ -53,6 +53,7 @@ class Wedge:
         trend_align: bool = False,
         limit_entry: bool = False,
         block_hours: tuple[int, ...] = (),
+        drop_long_vwap_alignment: bool = False,
     ):
         # 돌파 봉 종가를 쫓지 않고 추세선 가격에 지정가를 건다.
         # 949일 실측에서 시장가 -0.074% / 지정가 +0.091%였고 앞뒤 절반
@@ -68,6 +69,9 @@ class Wedge:
         # 949일 실측에서 상승장 숏 13건이 -94.5로 이 전략 손실의 전부였고,
         # 앞뒤 절반 모두 마이너스(-48.5 / -46.0)라 구간 우연이 아니다.
         self.trend_align = trend_align
+        # 롱(하락 쐐기)에서 vwap_aligned 품질 항목을 뺄지.
+        # head_shoulders.py의 같은 이름 필드 docstring 참고 — EXP-014.
+        self.drop_long_vwap_alignment = drop_long_vwap_alignment
         self.tf = xb.LADDER[timeframe]
         # 태그에 봉을 붙인다. 같은 패턴도 봉마다 성과가 달라
         # 따로 집계해야 한다 (실측: double_top 5분 -0.21%, 1시간 +0.40%).
@@ -158,6 +162,8 @@ class Wedge:
         profile = cb.profile_at(df, as_of)
         quality = cb.assess(df, prepared, as_of, side, start, level, profile, prior_ok, self.tf)
         quality.append("converging")
+        if self.drop_long_vwap_alignment and side == "long":
+            quality = [item for item in quality if item != "vwap_aligned"]
 
         if len(quality) < cb.MIN_QUALITY:
             return None

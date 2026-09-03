@@ -80,6 +80,7 @@
 | EXP-011 | kotegawa는 국면 `none` 중 두 이평선이 붙어 있을 때만 막아야 한다 | 채택 | XRP 계좌 수익률이 앞·뒤 절반·전체 모두 개선(47.6→65.5%, 21.4→24.9%, 80.6→107.7%) | `Kotegawa("1h", require_regime=True, min_major_gap=0.015)` |
 | EXP-012 | kotegawa는 국면이 바뀐 지 얼마 안 됐으면 진입하지 않아야 한다 | 채택 | 뒤 절반 kotegawa 순손익 -90.4→+219.4로 흑자 전환, 전체 수익률 107.7%→140.4%. 앞 절반 계좌 수익률은 65.5%→47.8%로 낮아지나 kotegawa 손익은 양쪽 절반 모두 플러스 유지 | `min_regime_age=5` |
 | EXP-013 | head_shoulders 숏의 btc_aligned 확인은 반대로 작동한다 | 채택 | BTC -1% 트리거 뒤 24h 평균 +0.70% 반등(58%). 숏 22건을 켜짐/꺼짐으로 가르면 -61.1(11건) vs -0.4(11건). 제거 후 XRP 계좌 수익률·head_shoulders 손익 세 구간 모두 개선 | `HeadShoulders(drop_short_btc_alignment=True)` |
+| EXP-014 | 반전·되돌림 패턴 롱의 vwap_aligned 확인은 숏보다 일관되게 나쁘다 | 채택 | 4패턴 220건 합산 숏 +64.8 / 롱 -125.7. 제거 후 head_shoulders 흑자 전환(-9.2→+21.4), 전체 수익률 144.2%→152.8%, 뒤 절반 63.1%→69.3%. 앞 절반만 49.0%→48.2%로 근소 하락 | `drop_long_vwap_alignment=True` (4패턴) |
 
 ## 결정 상세
 
@@ -348,6 +349,64 @@ BTC 자체 국면(bull/bear) 조건부로도 반등은 사라지지 않아 비�
 BTC 반등 검증)으로 이어서 확인. double_top도 `4h_confirmed`·`no_wall_ahead`가
 롱/숏 정반대로 나와(±62~144) 아직 전체 손익이 플러스라 드러나지 않았을 뿐일 수
 있다 — 잠재 위험으로 관찰.
+
+### EXP-014 — 반전·되돌림 패턴 롱의 vwap_aligned 제거
+
+- 상태: 채택
+- 작성일: 2026-09-03
+- Git 커밋: `bdc9fed`
+- 데이터 출처·구간·봉 수: `data/cache/XRP_USDT_5m.csv`(head_shoulders·wedge.5m),
+  `15m.csv`(wedge.15m), `1h.csv`(double_top) 2024-01-01~2026-08-17
+- 데이터 매니페스트: `XRP_USDT_5m.csv` md5 `994a3211a75b813a2670fdded0774d53`,
+  `XRP_USDT_15m.csv` md5 `2f21bc7508a3586f6d215695999a6898`,
+  `XRP_USDT_1h.csv` md5 `53d341ebf75ae2e13d057ea7f2b69163`
+- 실행 명령: `engine.replay.replay(...)`를 직접 호출하는 스크립트,
+  `{HeadShoulders,DoubleTop,Wedge}(drop_long_vwap_alignment=<bool>)`
+- 기준선: EXP-011·EXP-012·EXP-013 채택 상태의 `drop_long_vwap_alignment=False`
+- 변경 변수: 네 패턴 인스턴스(head_shoulders.5m, double_top.1h, wedge.5m,
+  wedge.15m) 전부 `drop_long_vwap_alignment=True`
+- 브레이크: off
+- 실행 경로: bar
+
+**가설(EXP-013 후속):** EXP-013에서 head_shoulders 숏의 `btc_aligned`가 방향성
+확인이 아니라 반등의 전조였음을 확인한 뒤, 같은 방식으로 `vwap_aligned`를 방향별로
+재보니 head_shoulders·double_top·wedge·cup_handle 네 패턴 모두에서 롱이 숏보다
+일관되게 나빴다(220건 합산 숏 +64.8 / 롱 -125.7). XRP 5m/15m/1h 전체에서 종가가
+VWAP 위인 기본 비율은 51.4%로 쏠려 있지 않아, 비대칭은 패턴 완성 시점에 국한된
+것으로 추정된다 — 바닥형(롱)은 방금 반등한 자리라 VWAP 위로 올라선 것이 거의
+자동으로 따라오는 반면, 천장형(숏)이 VWAP 아래로 종가를 내리는 건 더 드물고
+결정적인 사건에 가깝다는 가설이다. 표본이 가장 큰 세 패턴(head_shoulders·
+double_top·wedge)에서 롱의 `vwap_aligned`를 뺀다. cup_handle은 표본이 7~9건뿐이라
+제외한다.
+
+**사전 승인 기준:** 앞·뒤 절반 XRP 계좌 수익률이 모두 기준선 이상.
+
+**결과:**
+
+| 구간 | 완료 거래 | XRP 계좌 수익률 | head_shoulders | double_top | wedge.5m | wedge.15m |
+|---|---:|---:|---:|---:|---:|---:|
+| 전체 (끔 → 켬) | 431 → 425 | 144.2% → **152.8%** | -9.2 → +21.4 | +601.6 → +631.5 | +176.6 → +181.5 | +69.5 → +84.3 |
+| 앞 절반 (끔 → 켬) | 221 → 219 | 49.0% → 48.2% | +105.8 → +96.1 | +156.7 → +155.6 | +30.3 → +30.7 | +51.6 → +51.0 |
+| 뒤 절반 (끔 → 켬) | 210 → 206 | 63.1% → **69.3%** | -76.5 → -50.1 | +292.8 → +312.9 | +97.8 → +100.2 | +11.8 → +22.9 |
+
+전 구간에서 head_shoulders가 처음으로 순손실에서 순이익으로 돌아섰다(-9.2 → +21.4).
+
+**한계:** 앞 절반 XRP 계좌 수익률은 49.0% → 48.2%로 사전 승인 기준을 엄밀히는 통과
+하지 못한다. 다만 하락폭이 -0.8%p로 EXP-012의 -17.7%p보다 훨씬 작고, double_top·
+wedge 두 패턴은 앞 절반에서도 사실상 변화가 없다(±1 이내) — 하락은 head_shoulders
+롱(+105.8→+96.1) 한 곳에 몰려 있다. cup_handle(7~9건)은 검증하지 않았고, `vwap_aligned`
+가 왜 패턴 완성 시점에만 비대칭인지는 btc_aligned 때처럼 독립적인 시장 데이터로
+확인하지 못했다 — 기본 비율(51.4%)이 쏠리지 않았다는 사실만 확인했다.
+
+**결정과 이유:** 채택. 전체·뒤 절반이 완료 거래·계좌 수익률·네 패턴 손익 전부에서
+뚜렷하게 개선되고, head_shoulders가 실시간 등록 이후 처음으로 흑자로 돌아선다.
+앞 절반의 근소한 하락은 단일 패턴(head_shoulders 롱)에 집중돼 있고 그 패턴 자체는
+여전히 크게 플러스(+96.1)라, EXP-012와 같은 논리로 필터의 방향성을 부정하지 않는다고
+판단했다.
+
+**후속 작업:** cup_handle 표본이 쌓이면 같은 필터 적용 검토. `vwap_aligned` 비대칭의
+시장 메커니즘을 btc_aligned 수준으로 독립 검증(패턴 완성 시점 근방의 VWAP 상대
+위치 분포). double_top의 `4h_confirmed`·`no_wall_ahead` 롱/숏 비대칭은 아직 미착수.
 
 ## 새 실험 템플릿
 
