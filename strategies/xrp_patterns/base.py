@@ -230,6 +230,42 @@ def major_gap(frames: dict[str, pd.DataFrame], entry_index: pd.Index, tf) -> pd.
     )
 
 
+def regime_age(frames: dict[str, pd.DataFrame], entry_index: pd.Index, tf) -> pd.Series:
+    """직전 4시간봉이 지금과 같은 국면(bull/bear/none)으로 유지된 연속 봉 수.
+
+    kotegawa 뒤 절반(2025-04-26~2026-08-17) 손익을 승/패로 갈라보면 국면
+    나이 중앙값이 이긴 거래 7~9.5, 진 거래 3~4로 네 그룹(롱/숏 x 두 절반)
+    전부 같은 방향이었다. 국면이 막 바뀐 자리는 아직 굳지 않아 되돌림을
+    노리면 계속 밀리고, 며칠 유지된 국면의 조정이라야 진짜 되돌림이다.
+    전환 자체는 예측할 수 없지만 "방금 전환됐다"는 사실은 진입 시점에
+    이미 관측 가능하다.
+    """
+
+    major = frames.get(MAJOR_TF)
+    if major is None or major.empty:
+        return pd.Series(float("nan"), index=entry_index, dtype="float64")
+
+    from indicators.ma import regime as ma_regime
+    from strategies.btc_trend import context_index
+
+    reg = ma_regime(major, fast=20, slow=60).to_numpy()
+    age = np.zeros(len(reg), dtype="float64")
+    for i in range(1, len(reg)):
+        age[i] = 0.0 if reg[i] != reg[i - 1] else age[i - 1] + 1.0
+
+    entry = frames[tf.entry]
+    idx = context_index(
+        entry["ts"].to_numpy(),
+        major["ts"].to_numpy(),
+        entry_tf=tf.entry,
+        context_tf=MAJOR_TF,
+    )
+    return pd.Series(
+        [age[i] if i >= 0 else float("nan") for i in idx],
+        index=entry_index, dtype="float64",
+    )
+
+
 def counter_trend(prepared: Prepared, as_of: int, side: str, tf) -> bool:
     """대세와 반대 방향인가.
 
@@ -259,6 +295,7 @@ def scalp_prepare(frames: dict[str, pd.DataFrame], tf: "Timeframes" = None) -> P
             "btc_adverse": btc_adverse(frames, entry.index, tf=tf),
             "major_regime": major_regime(frames, entry.index, tf),
             "major_gap": major_gap(frames, entry.index, tf),
+            "regime_age": regime_age(frames, entry.index, tf),
         }
     )
     return prepared

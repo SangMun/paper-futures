@@ -1924,8 +1924,11 @@ def build_strategies() -> dict[str, list]:
 
             # 이격도 역추세 — 1시간봉이 양 종목에서 유의(+0.56%).
             # 4시간봉 국면 'none' 중 두 이평선이 붙어 있으면(진짜 방향
-            # 없음) 진입하지 않는다 — EXP-011.
-            Kotegawa("1h", require_regime=True, min_major_gap=0.015),
+            # 없음) 진입하지 않는다 — EXP-011. 국면이 바뀐 지 5봉(20시간)
+            # 안 됐으면 진입하지 않는다 — EXP-012.
+            Kotegawa(
+                "1h", require_regime=True, min_major_gap=0.015, min_regime_age=5,
+            ),
         ],
     }
 

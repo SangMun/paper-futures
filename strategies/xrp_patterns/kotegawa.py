@@ -87,8 +87,13 @@ class Kotegawa:
         require_regime: bool = False,
         min_major_gap: float = 0.02,
         require_reversal_confirm: bool = False,
+        min_regime_age: float = 0.0,
     ):
         self.symbol = symbol
+        # 국면(4시간봉)이 지금 형태로 유지된 지 이 값(봉 수)보다 짧으면
+        # 진입하지 않는다. EXP-010 후속 — 뒤 절반 실측에서 이긴 거래의
+        # 국면 나이 중앙값이 진 거래의 2~3배였다(전환 직후엔 아직 안 굳음).
+        self.min_regime_age = min_regime_age
         # 원전(BNF)의 RSI 과매도·MACD 0선 돌파 조건을 되살릴지.
         # EXP-010 참고 — 모듈 docstring ②-b.
         self.require_reversal_confirm = require_reversal_confirm
@@ -160,6 +165,11 @@ class Kotegawa:
             # 근거가 없으므로 막는 쪽을 택한다.
             gap = prepared.at(self.tf.entry, "major_gap", as_of)
             if pd.isna(gap) or gap < self.min_major_gap:
+                return []
+
+        if self.min_regime_age > 0:
+            age = prepared.at(self.tf.entry, "regime_age", as_of)
+            if pd.isna(age) or age < self.min_regime_age:
                 return []
 
         # 떨어지는 칼을 그대로 받지 않는다. 반등 확인 캔들이 있어야 한다.
