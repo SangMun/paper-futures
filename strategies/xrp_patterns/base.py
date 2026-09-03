@@ -193,6 +193,43 @@ def major_regime(frames: dict[str, pd.DataFrame], entry_index: pd.Index, tf) -> 
     )
 
 
+def major_gap(frames: dict[str, pd.DataFrame], entry_index: pd.Index, tf) -> pd.Series:
+    """4시간봉 두 이평선 사이 간격(가격 대비). 국면 'none'을 쪼개는 데 쓴다.
+
+    `major_regime`의 'none'은 측정된 횡보가 아니라 **정배열도 역배열도 아닌
+    나머지 전부**다. 실측(XRP 4시간봉 5,707개)에서 none의 이평선 간격
+    중앙값이 2.12%로 bull(2.36%)·bear(2.35%)와 거의 같았고, none의 44.9%는
+    두 선이 추세 수준으로 벌어진 상태였다 — 추세는 살아 있는데 가격만
+    두 선 사이에 잠깐 낀 구간이다. 되돌림·평균 회귀가 노리는 자리가 바로
+    거기라, none을 통째로 막으면 노려야 할 자리까지 같이 막힌다.
+
+    이 값이 작을 때만(두 선이 붙어 있을 때) 진짜 방향 없음으로 본다.
+    """
+
+    major = frames.get(MAJOR_TF)
+    if major is None or major.empty:
+        return pd.Series(float("nan"), index=entry_index, dtype="float64")
+
+    from indicators.ma import sma
+    from strategies.btc_trend import context_index
+
+    entry = frames[tf.entry]
+    idx = context_index(
+        entry["ts"].to_numpy(),
+        major["ts"].to_numpy(),
+        entry_tf=tf.entry,
+        context_tf=MAJOR_TF,
+    )
+    fast = sma(major, 20).to_numpy()
+    slow = sma(major, 60).to_numpy()
+    price = major["close"].to_numpy()
+    gap = abs(fast - slow) / price
+    return pd.Series(
+        [gap[i] if i >= 0 else float("nan") for i in idx],
+        index=entry_index, dtype="float64",
+    )
+
+
 def counter_trend(prepared: Prepared, as_of: int, side: str, tf) -> bool:
     """대세와 반대 방향인가.
 
@@ -221,6 +258,7 @@ def scalp_prepare(frames: dict[str, pd.DataFrame], tf: "Timeframes" = None) -> P
             "ctx_bias": context_bias(frames, entry.index, tf),
             "btc_adverse": btc_adverse(frames, entry.index, tf=tf),
             "major_regime": major_regime(frames, entry.index, tf),
+            "major_gap": major_gap(frames, entry.index, tf),
         }
     )
     return prepared

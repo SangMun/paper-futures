@@ -16,6 +16,15 @@
      떨어지는 칼을 그대로 받지 않는다. 이격도가 벌어진 것만으로는
      진입하지 않고 되돌림 거부가 나와야 한다.
 
+  ②-b RSI·MACD 확인 (`require_reversal_confirm`, 기본 꺼짐).
+     원전(BNF)의 진입 4조건은 이격도·**RSI 30 이하·MACD 0선 하향에서
+     상향 돌파**·과거 지지선이다. 지금까지 코드는 이 중 이격도 하나만
+     가져왔다 — "①에서 백분위로 바꾼 게 원인"이라고 짚었지만, 실제로는
+     ①이 아니라 **RSI·MACD로 하던 "진짜 바닥인가" 확인 자체가 빠진 것**이
+     더 크다. 백분위는 상대적 극단성을 유지하지만, 되돌아설 조짐이 실제로
+     있는지는 반등 확인 캔들(②)만으로 검증하고 있었다.
+     EXP-010에서 앞뒤 절반 검증. 아래 참고.
+
   ③ 익절 목표가 이평선 회귀다.
      다른 네 패턴은 VPVR HVN을 쓰지만 이 전략은 평균 회귀가 논리 자체라
      MA를 목표로 둔다. 다만 MA가 손절보다 가까우면 진입하지 않는다.
@@ -64,12 +73,34 @@ DEVIATION_PERCENTILE = 3.0
 # 아주 작은 이격도도 하위 3%가 되어 신호가 남발된다.
 MIN_DEVIATION = 0.006
 
+# 원전의 RSI 과매도 문턱(30). 롱은 이 아래, 숏은 100에서 뺀 값 위여야 한다.
+REVERSAL_RSI_THRESHOLD = 30.0
+
 
 class Kotegawa:
     """이평선 이격도 과대 → 반등 확인 → 평균 회귀 목표."""
 
-    def __init__(self, timeframe: str = "5m", symbol: str = "XRP_USDT"):
+    def __init__(
+        self,
+        timeframe: str = "5m",
+        symbol: str = "XRP_USDT",
+        require_regime: bool = False,
+        min_major_gap: float = 0.02,
+        require_reversal_confirm: bool = False,
+    ):
         self.symbol = symbol
+        # 원전(BNF)의 RSI 과매도·MACD 0선 돌파 조건을 되살릴지.
+        # EXP-010 참고 — 모듈 docstring ②-b.
+        self.require_reversal_confirm = require_reversal_confirm
+        # 4시간봉 국면이 'none'(정배열도 역배열도 아님)이면 진입하지 않을지.
+        #
+        # **역행 차단(trend_align)과 반대 방향의 필터다.** 역행을 막는 쪽은
+        # 재봤더니 이 전략 손익이 +69.0에서 -2.3으로 무너졌다 — 평균 회귀는
+        # 추세와 반대인 자리가 곧 수익원이라 그렇다. 데이터가 가리키는 건
+        # 역행이 아니라 **방향이 없는 구간**이다.
+        self.require_regime = require_regime
+        # 이 값보다 두 선이 벌어져 있으면 추세 중 조정으로 보고 통과시킨다.
+        self.min_major_gap = min_major_gap
         self.tf = xb.LADDER[timeframe]
         # 태그에 봉을 붙인다. 같은 패턴도 봉마다 성과가 달라
         # 따로 집계해야 한다 (실측: double_top 5분 -0.21%, 1시간 +0.40%).
@@ -121,11 +152,37 @@ class Kotegawa:
 
         if xb.blocked(prepared, as_of, side, self.tf) is not None:
             return []
+        if self.require_regime and prepared.at(
+            self.tf.entry, "major_regime", as_of
+        ) == "none":
+            # none을 통째로 막으면 추세 중 조정 구간까지 잘린다. 두 이평선이
+            # 붙어 있을 때만(진짜 방향 없음) 거른다. gap이 None이면 판단할
+            # 근거가 없으므로 막는 쪽을 택한다.
+            gap = prepared.at(self.tf.entry, "major_gap", as_of)
+            if pd.isna(gap) or gap < self.min_major_gap:
+                return []
 
         # 떨어지는 칼을 그대로 받지 않는다. 반등 확인 캔들이 있어야 한다.
         window = df.iloc[as_of - 1 : as_of + 1]
         if not bool(patterns.confirmation(window, float(df["low"].iloc[as_of]), side).iloc[-1]):
             return []
+
+        if self.require_reversal_confirm:
+            # 원전 조건: RSI 과매도/과열 + MACD 확인.
+            #
+            # MACD는 뺐다 (EXP-010). 엄밀한 0선 상향 돌파는 이격도가 아직
+            # 극단인 시점과 구조적으로 겹치지 않는다(1,693건 중 0건) —
+            # 되돌림이 이미 상당히 진행된 뒤에야 0선을 넘기 때문이다. 직전
+            # 봉 대비 모멘텀 개선으로 완화해도 6.3%만 통과해 표본이 3건까지
+            # 줄어 검증이 불가능했다. RSI만으로도 59.0%가 통과해 판별력이
+            # 있었으므로 MACD 없이 RSI만 남긴다.
+            rsi_now = prepared.at(self.tf.entry, "rsi", as_of)
+            if pd.isna(rsi_now):
+                return []
+            if side == "long" and rsi_now > REVERSAL_RSI_THRESHOLD:
+                return []
+            if side == "short" and rsi_now < 100 - REVERSAL_RSI_THRESHOLD:
+                return []
 
         close = float(df["close"].iloc[as_of])
 

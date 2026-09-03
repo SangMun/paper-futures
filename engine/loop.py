@@ -1923,7 +1923,9 @@ def build_strategies() -> dict[str, list]:
             HeadShoulders("5m", trend_align=True),
 
             # 이격도 역추세 — 1시간봉이 양 종목에서 유의(+0.56%).
-            Kotegawa("1h"),
+            # 4시간봉 국면 'none' 중 두 이평선이 붙어 있으면(진짜 방향
+            # 없음) 진입하지 않는다 — EXP-011.
+            Kotegawa("1h", require_regime=True, min_major_gap=0.015),
         ],
     }
 
