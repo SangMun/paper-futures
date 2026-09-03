@@ -66,6 +66,36 @@ def _merge(levels: list[fib.FibLevel], tolerance: float) -> list[list[fib.FibLev
     return groups
 
 
+def _independent(swings, max_overlap: float) -> int:
+    """구조적으로 독립인 스윙이 몇 개인가.
+
+    `id()`로 세면 안 된다. `build_swings`는 같은 시작점에서 새 극값이 나올
+    때마다 후보를 남기므로, 상위 후보들은 대부분 **하나의 다리를 크기만 달리
+    본 중첩 버전**이다. 객체는 다르지만 같은 움직임이라 독립 증거가 아니다.
+
+    실측(BTC 1시간봉 597개 시점): 상위 후보 3개의 가격 구간 겹침 중앙값이
+    1.00이었고 94.8%의 시점에서 90% 이상 겹쳤다. 그런데도 겹침 가점은
+    꼬박꼬박 붙어, 문턱을 넘은 존의 51.3%가 그 가점 없이는 미달이었다.
+
+    큰 다리부터 잡고, 이미 잡은 다리와 가격 구간이 `max_overlap` 넘게
+    겹치면 같은 다리로 본다.
+    """
+
+    chosen: list = []
+    for swing in sorted(swings, key=lambda x: x.size, reverse=True):
+        if swing.size <= 0:
+            continue
+        duplicate = False
+        for kept in chosen:
+            share = min(swing.high, kept.high) - max(swing.low, kept.low)
+            if share > 0 and share / min(swing.size, kept.size) > max_overlap:
+                duplicate = True
+                break
+        if not duplicate:
+            chosen.append(swing)
+    return len(chosen)
+
+
 def _score(
     group: list[fib.FibLevel],
     center: float,
@@ -85,10 +115,11 @@ def _score(
 
     # 서로 다른 스윙에서 나온 레벨이 겹칠 때 개당 가점.
     # 같은 스윙의 레벨 여러 개가 겹치는 건 합류가 아니다.
-    distinct = {id(level.swing) for level in group}
-    if len(distinct) > 1:
-        score += CONFLUENCE_WEIGHTS["fib_overlap"] * (len(distinct) - 1)
-        members.append(f"fib_overlap_{len(distinct)}")
+    unique = {id(level.swing): level.swing for level in group}.values()
+    distinct = _independent(list(unique), FIB.swing_overlap_max)
+    if distinct > 1:
+        score += CONFLUENCE_WEIGHTS["fib_overlap"] * (distinct - 1)
+        members.append(f"fib_overlap_{distinct}")
 
     if any(level.is_golden for level in group):
         score += CONFLUENCE_WEIGHTS["golden_pocket"]

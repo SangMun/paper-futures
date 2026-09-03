@@ -367,6 +367,10 @@ class FibConfig:
     pivot_n: int = 5                    # 후보: 3, 5, 8
     min_swing_pct: float = 0.03         # 후보: 0.02, 0.03, 0.05
     zone_tolerance_atr: float = 0.25    # 후보: 0.2, 0.25, 0.4
+
+    # 두 스윙의 가격 구간이 이 비율 넘게 겹치면 같은 다리로 본다.
+    # 겹침 가점(fib_overlap)이 하나의 움직임을 여러 번 세지 않게 하는 값이다.
+    swing_overlap_max: float = 0.5
     min_zone_score: float = 3.0         # 후보: 2, 3, 4
 
     # --- 아래는 고정 ---
