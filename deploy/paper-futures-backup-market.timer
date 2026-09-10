@@ -6,7 +6,7 @@ Description=Weekly paper-bot market-data backup
 OnCalendar=Sun *-*-* 18:30:00 UTC
 RandomizedDelaySec=10m
 Persistent=true
-Unit=xrp-paper-bot-backup-market.service
+Unit=paper-futures-backup-market.service
 
 [Install]
 WantedBy=timers.target

@@ -7,9 +7,9 @@ After=network-online.target
 Type=oneshot
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/home/ubuntu/xrp-paper-bot/v2
-EnvironmentFile=/etc/xrp-paper-bot/backup.env
-ExecStart=/home/ubuntu/xrp-paper-bot/v2/deploy/backup-to-s3.sh market
+WorkingDirectory=/home/ubuntu/paper-futures/v2
+EnvironmentFile=/etc/paper-futures/backup.env
+ExecStart=/home/ubuntu/paper-futures/v2/deploy/backup-to-s3.sh market
 
 NoNewPrivileges=true
 PrivateTmp=true

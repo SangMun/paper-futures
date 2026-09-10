@@ -406,7 +406,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    with httpx.Client(timeout=20.0, headers={"User-Agent": "xrp-paper-bot-dashboard/0.1"}) as client:
+    with httpx.Client(timeout=20.0, headers={"User-Agent": "paper-futures-dashboard/0.1"}) as client:
         candles_by_tf = {
             timeframe: enrich(fetch_candles(client, timeframe, "BTC_USDT"))
             for timeframe in TIMEFRAMES

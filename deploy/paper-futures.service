@@ -7,10 +7,10 @@ After=network-online.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/home/ubuntu/xrp-paper-bot/v2
-EnvironmentFile=/home/ubuntu/xrp-paper-bot/v2/.env
+WorkingDirectory=/home/ubuntu/paper-futures/v2
+EnvironmentFile=/home/ubuntu/paper-futures/v2/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/ubuntu/xrp-paper-bot/v2/.venv/bin/python -m engine.loop
+ExecStart=/home/ubuntu/paper-futures/v2/.venv/bin/python -m engine.loop
 
 # Use the same graceful shutdown path as Ctrl+C so state is persisted.
 KillSignal=SIGINT

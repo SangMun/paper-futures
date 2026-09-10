@@ -92,7 +92,7 @@ def parse_archive(payload: bytes, contract: str) -> pd.DataFrame:
 
 def fetch_month(contract: str, interval: str, month: datetime) -> pd.DataFrame:
     url = archive_url(contract, interval, month)
-    request = urllib.request.Request(url, headers={"User-Agent": "xrp-paper-bot-v2/0.1"})
+    request = urllib.request.Request(url, headers={"User-Agent": "paper-futures-v2/0.1"})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             payload = response.read()

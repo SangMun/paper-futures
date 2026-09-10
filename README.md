@@ -584,21 +584,25 @@ OI(`*_oi.csv`)는 최초 스냅샷만 보관하고 주간 동기화에서 제외
 장기 원본의 수집 범위가 달라, 짧은 서버 파일이 장기 원본을 덮어쓰는 것을 막기
 위해서다.
 
-서버 설정은 `/etc/xrp-paper-bot/backup.env`에 두고 Git에 넣지 않는다.
+서버 설정은 `/etc/paper-futures/backup.env`에 두고 Git에 넣지 않는다.
 
 ```bash
 BACKUP_BUCKET=xrp-paper-bot-backup-ACCOUNT-apne2
 AWS_REGION=ap-northeast-2
 AWS_PROFILE=xrp-paper-bot-backup
-BOT_ROOT=/home/ubuntu/xrp-paper-bot/v2
+BOT_ROOT=/home/ubuntu/paper-futures/v2
 ```
+
+`BACKUP_BUCKET`과 `AWS_PROFILE`은 옛 이름을 그대로 쓴다 — S3 버킷 리네임은
+재생성·데이터 이전이 필요해 저장소 개명만으로는 득보다 위험이 크고, AWS
+프로파일 이름은 로컬 별칭일 뿐 IAM 리소스와 무관해 바꿀 이유가 없다.
 
 수동 확인:
 
 ```bash
-sudo systemctl start xrp-paper-bot-backup-runtime.service
-sudo systemctl start xrp-paper-bot-backup-market.service
-sudo systemctl list-timers 'xrp-paper-bot-backup-*'
+sudo systemctl start paper-futures-backup-runtime.service
+sudo systemctl start paper-futures-backup-market.service
+sudo systemctl list-timers 'paper-futures-backup-*'
 ```
 
 복원할 때는 먼저 봇을 멈추고 대상 날짜를 명시한다. `state.json`만 복원하면 체결

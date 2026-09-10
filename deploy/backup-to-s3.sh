@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 
 mode="${1:-}"
-bot_root="${BOT_ROOT:-/home/ubuntu/xrp-paper-bot/v2}"
+bot_root="${BOT_ROOT:-/home/ubuntu/paper-futures/v2}"
 bucket="${BACKUP_BUCKET:-}"
 region="${AWS_REGION:-ap-northeast-2}"
 profile="${AWS_PROFILE:-xrp-paper-bot-backup}"

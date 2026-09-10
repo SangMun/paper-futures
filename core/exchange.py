@@ -75,7 +75,7 @@ class GateClient:
             timeout=timeout,
             transport=transport,
             headers={
-                "User-Agent": "xrp-paper-bot-v2/0.1",
+                "User-Agent": "paper-futures-v2/0.1",
                 "Accept": "application/json",
             },
         )
