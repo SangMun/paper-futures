@@ -1,6 +1,6 @@
 # BTC/XRP 페이퍼 트레이딩 봇
 
-[![CI](https://github.com/SangMun/xrp-paper-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/SangMun/xrp-paper-bot/actions/workflows/ci.yml)
+[![CI](https://github.com/SangMun/paper-futures/actions/workflows/ci.yml/badge.svg)](https://github.com/SangMun/paper-futures/actions/workflows/ci.yml)
 
 Gate.io USDT 무기한 선물 자동매매 봇. 지표·전략·리스크·체결을 분리해 **실시간 루프와
 과거 리플레이가 같은 엔진 코드를 탄다.** AWS Lightsail에서 모의 자금으로 운용 중이다.
