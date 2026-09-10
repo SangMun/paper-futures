@@ -15,7 +15,7 @@ async function fetchCandles(
   });
   if (before != null) query.set("to", String(before - 1));
   const response = await fetch(`${GATE_CANDLES}?${query}`, {
-    headers: { "User-Agent": "xrp-paper-bot-dashboard/0.2" },
+    headers: { "User-Agent": "paper-futures-dashboard/0.2" },
     cache: "no-store",
     signal: AbortSignal.timeout(8_000),
   });
@@ -31,7 +31,7 @@ async function fetchRange(timeframe: Timeframe, from: number, to: number) {
     to: String(to),
   });
   const response = await fetch(`${GATE_CANDLES}?${query}`, {
-    headers: { "User-Agent": "xrp-paper-bot-dashboard/0.2" },
+    headers: { "User-Agent": "paper-futures-dashboard/0.2" },
     cache: "no-store",
     signal: AbortSignal.timeout(8_000),
   });
