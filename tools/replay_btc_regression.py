@@ -18,8 +18,13 @@ from strategies.btc_regression_channel import BtcRegressionChannel
 from tools.replay_btc_candidates import completed_positions, max_drawdown_pct
 
 
-def run_offset(offset: float, direction: str, bars: int | None, balance: float) -> None:
-    strategy = BtcRegressionChannel(entry_offset_pct=offset, direction=direction)
+def run_offset(
+    offset: float, direction: str, bars: int | None, balance: float, regime: bool = False
+) -> None:
+    strategy = BtcRegressionChannel(
+        entry_offset_pct=offset, direction=direction,
+        regime_filter=regime, aligned_risk_mult=2.0 if regime else 1.0,
+    )
     with tempfile.TemporaryDirectory(prefix="btc-regression-") as tmp:
         with contextlib.redirect_stdout(io.StringIO()):
             result = replay(
@@ -67,6 +72,10 @@ def main() -> int:
     )
     parser.add_argument("--bars", type=int)
     parser.add_argument("--balance", type=float, default=1_000.0)
+    parser.add_argument(
+        "--regime", action="store_true",
+        help="실시간 설정과 같게 국면 필터 + 추세 일치 리스크 2배",
+    )
     args = parser.parse_args()
 
     offsets = args.offset or [0.01, 0.02]
@@ -75,7 +84,7 @@ def main() -> int:
     print("-" * 125)
     for offset in offsets:
         for direction in directions:
-            run_offset(offset, direction, args.bars, args.balance)
+            run_offset(offset, direction, args.bars, args.balance, args.regime)
     return 0
 
 

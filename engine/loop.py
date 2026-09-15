@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -1876,8 +1877,16 @@ def build_strategies() -> dict[str, list]:
         # 국면 필터 + 추세 일치 자리 가중.
         # 필터 없이는 103건 -6.53 (롱 +107 / 숏 -102로 상쇄).
         # 대세 역행과 횡보 숏을 빼면 41건 +168.12, 앞뒤 절반 모두 플러스.
+        # 진입 이격 1%. 2024-01~2026-07 리플레이(국면 필터 켬):
+        #   시장가(이격 0)  20건 -4.94%  — 목표가 채널선이라 R<1로 408건 거절
+        #   1%            114건 +82.18% DD 3.2%  체결 114/210
+        #   2%             58건 +80.73% DD 5.0%  체결  58/240
+        # 수익은 같고 1%가 거래 2배·낙폭 절반. 실시간 2% 주문 3건은
+        # 전부 0.9~2.1% 못 미쳐 만료됐고 1%였으면 1건은 체결됐다.
         "BTC_USDT": [
-            BtcRegressionChannel(regime_filter=True, aligned_risk_mult=2.0),
+            BtcRegressionChannel(
+                entry_offset_pct=0.01, regime_filter=True, aligned_risk_mult=2.0,
+            ),
             BtcRegime25x(),
         ],
         "XRP_USDT": [
@@ -1953,21 +1962,47 @@ def build_btc_candidates() -> dict[str, list]:
     return {"BTC_USDT": [BtcPullbackReversal(), BtcTrendContinuation()]}
 
 
-def main() -> int:
-    engine = Engine(strategies=build_strategies())
-    tags = [s.name for group in engine.strategies.values() for s in group]
+def select_strategies(strategies: dict[str, list], spec: str) -> dict[str, list]:
+    """PAPER_STRATEGIES로 이 프로세스가 돌릴 전략만 남긴다.
 
-    print(f"시작 — 잔고 {engine.bot_state.balance:,.2f} USDT")
+    쉼표 구분 접두사 목록. "btc_regime_25x" 는 그 전략 하나,
+    "xrp_patterns" 는 XRP 패턴 전부. 빈 값이면 전부(단일 계좌).
+    계좌를 전략별로 나누는 용도라 아무것도 안 남으면 설정 실수다.
+    """
+
+    prefixes = tuple(p.strip() for p in spec.split(",") if p.strip())
+    if not prefixes:
+        return strategies
+    out = {
+        contract: [s for s in group if s.name.startswith(prefixes)]
+        for contract, group in strategies.items()
+    }
+    out = {k: v for k, v in out.items() if v}
+    if not out:
+        raise SystemExit(f"PAPER_STRATEGIES에 맞는 전략이 없다: {spec!r}")
+    return out
+
+
+def main() -> int:
+    account = os.environ.get("PAPER_ACCOUNT", "")
+    strategies = select_strategies(
+        build_strategies(), os.environ.get("PAPER_STRATEGIES", "")
+    )
+    engine = Engine(strategies=strategies)
+    tags = [s.name for group in engine.strategies.values() for s in group]
+    label = f" [{account}]" if account else ""
+
+    print(f"시작{label} — 잔고 {engine.bot_state.balance:,.2f} USDT")
     print(f"종목 {[s.contract for s in engine.symbols]}")
     print(f"전략 {tags}")
     engine.notifier.text(
-        "🟢 페이퍼 봇 시작\n"
-        f"잔고 {engine.bot_state.balance:,.2f} USDT · 종목 BTC/XRP"
+        f"🟢 페이퍼 봇 시작{label}\n"
+        f"잔고 {engine.bot_state.balance:,.2f} USDT · 전략 {', '.join(tags)}"
     )
     try:
         engine.run()
     finally:
-        engine.notifier.text("🔴 페이퍼 봇 종료")
+        engine.notifier.text(f"🔴 페이퍼 봇 종료{label}")
         engine.close()
     return 0
 

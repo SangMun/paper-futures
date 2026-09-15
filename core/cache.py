@@ -10,6 +10,7 @@ CSV로 저장한다. parquet이 빠르지만 의존성이 하나 더 늘고,
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -18,6 +19,15 @@ from core import candles as cd
 
 
 CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "cache"
+
+
+def _write_csv(df: pd.DataFrame, p: Path) -> None:
+    """임시 파일에 쓰고 rename. 계좌별 프로세스 여럿이 같은 캐시를 읽고 쓰므로
+    to_csv가 파일을 비운 순간 다른 프로세스가 읽으면 EmptyDataError가 난다."""
+
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    df.to_csv(tmp, index=False)
+    os.replace(tmp, p)
 
 
 def path_for(contract: str, interval: str) -> Path:
@@ -45,7 +55,7 @@ def save(contract: str, interval: str, df: pd.DataFrame) -> Path:
     merged = cd.merge(load(contract, interval), df)
 
     p = path_for(contract, interval)
-    merged.drop(columns=["dt"]).to_csv(p, index=False)
+    _write_csv(merged.drop(columns=["dt"]), p)
     return p
 
 
@@ -79,7 +89,7 @@ def save_oi(contract: str, interval: str, df: pd.DataFrame) -> Path:
         df = pd.concat([old, df.drop(columns=["dt"], errors="ignore")], ignore_index=True)
         df = df.sort_values("ts").drop_duplicates(subset="ts", keep="last")
 
-    df.drop(columns=["dt"], errors="ignore").to_csv(p, index=False)
+    _write_csv(df.drop(columns=["dt"], errors="ignore"), p)
     return p
 
 

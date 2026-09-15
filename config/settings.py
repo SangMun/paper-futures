@@ -4,6 +4,7 @@
 포워드 테스트 결과로 조정할 값과 고정할 값을 구분해 둔다.
 """
 
+import os
 from dataclasses import dataclass
 
 
@@ -512,9 +513,12 @@ def history_days(interval: str, step_seconds: int) -> int:
 
 # ---------------------------------------------------------------- 로깅
 
-TRADE_LOG_PATH = "data/trades.csv"        # 체결 기록 (컬럼 고정, 엑셀 확인용)
-SIGNAL_LOG_PATH = "data/signals.jsonl"    # 신호 스냅샷 (스킵/팬텀 포함)
-STATE_PATH = "data/state.json"
+# 계좌를 전략별로 나눠 여러 프로세스를 돌릴 때 PAPER_DATA_DIR로 기록 위치를
+# 분리한다 (deploy/paper-futures@.service). 기본값은 단일 계좌 그대로.
+DATA_DIR = os.environ.get("PAPER_DATA_DIR", "data")
+TRADE_LOG_PATH = f"{DATA_DIR}/trades.csv"        # 체결 기록 (컬럼 고정, 엑셀 확인용)
+SIGNAL_LOG_PATH = f"{DATA_DIR}/signals.jsonl"    # 신호 스냅샷 (스킵/팬텀 포함)
+STATE_PATH = f"{DATA_DIR}/state.json"
 
 # 디스코드 웹훅 URL은 환경변수로 받는다. 코드에 넣지 않는다.
 # 종류별 URL이 없으면 기존 단일 URL로 보낸다. 기존 배포와

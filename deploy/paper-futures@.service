@@ -1,0 +1,38 @@
+[Unit]
+Description=Paper trading bot account %i
+Wants=network-online.target
+After=network-online.target
+
+# 계좌를 전략별로 나눈 인스턴스. 인스턴스 이름(%i)마다 .env.%i 를 읽고
+# data/%i/ 에 기록한다. 단일 계좌(paper-futures.service)와 같이 켜지 말 것 —
+# 같은 전략이 두 계좌에서 동시에 주문을 낸다.
+#
+#   sudo systemctl enable --now paper-futures@btc25x
+#   sudo systemctl enable --now paper-futures@btcchan
+#   sudo systemctl enable --now paper-futures@xrp
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/paper-futures/v2
+EnvironmentFile=/home/ubuntu/paper-futures/v2/.env.%i
+Environment=PYTHONUNBUFFERED=1
+Environment=PAPER_ACCOUNT=%i
+Environment=PAPER_DATA_DIR=data/%i
+ExecStart=/home/ubuntu/paper-futures/v2/.venv/bin/python -m engine.loop
+
+# Use the same graceful shutdown path as Ctrl+C so state is persisted.
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=10
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+RestrictSUIDSGID=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

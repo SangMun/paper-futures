@@ -35,19 +35,26 @@ fi
 aws_args=(--profile "$profile" --region "$region" --no-cli-pager)
 
 backup_runtime() {
-    local day file found
+    local day file found dir name
     day="$(date -u +%F)"
     found=0
 
-    for file in state.json trades.csv signals.jsonl; do
-        if [[ -f "$bot_root/data/$file" ]]; then
-            "$aws_bin" "${aws_args[@]}" s3 cp \
-                "$bot_root/data/$file" \
-                "s3://$bucket/runtime/daily/$day/$file" \
-                --sse AES256 \
-                --only-show-errors
-            found=1
-        fi
+    # data/ 는 단일 계좌, data/<account>/ 는 전략별 계좌(paper-futures@.service).
+    # 계좌 폴더는 runtime/daily/<day>/<account>/ 아래로 올린다.
+    for dir in "$bot_root/data" "$bot_root"/data/*/; do
+        dir="${dir%/}"
+        name="${dir#"$bot_root/data"}"
+        name="${name#/}"
+        for file in state.json trades.csv signals.jsonl; do
+            if [[ -f "$dir/$file" ]]; then
+                "$aws_bin" "${aws_args[@]}" s3 cp \
+                    "$dir/$file" \
+                    "s3://$bucket/runtime/daily/$day/${name:+$name/}$file" \
+                    --sse AES256 \
+                    --only-show-errors
+                found=1
+            fi
+        done
     done
 
     if [[ "$found" -eq 0 ]]; then

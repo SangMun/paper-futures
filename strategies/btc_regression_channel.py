@@ -76,7 +76,8 @@ class BtcRegressionChannel:
             if entry_offset_pct is None
             else float(entry_offset_pct)
         )
-        if not math.isfinite(self.entry_offset_pct) or not 0 < self.entry_offset_pct < 0.1:
+        # 0이면 이격 지정가 대신 이탈봉 종가 시장가로 들어간다.
+        if not math.isfinite(self.entry_offset_pct) or not 0 <= self.entry_offset_pct < 0.1:
             raise ValueError(
                 f"회귀채널 진입 이격은 0~10% 사이여야 한다: {self.entry_offset_pct}"
             )
@@ -164,20 +165,21 @@ class BtcRegressionChannel:
         lower = float(lower)
         atr = float(atr)
 
+        market = self.entry_offset_pct == 0
         if slope < 0 and high > upper and prev_high <= float(prev_upper):
             side = "short"
             channel_level = upper
-            entry = upper * (1.0 + self.entry_offset_pct)
+            entry = close if market else upper * (1.0 + self.entry_offset_pct)
             # 현재가 아래에 sell limit을 놓으면 즉시 시장가가 된다.
-            if entry <= close:
+            if not market and entry <= close:
                 return []
             stop_hint = entry + atr * REGRESSION_CHANNEL.stop_hint_atr_mult
         elif slope > 0 and low < lower and prev_low >= float(prev_lower):
             side = "long"
             channel_level = lower
-            entry = lower * (1.0 - self.entry_offset_pct)
+            entry = close if market else lower * (1.0 - self.entry_offset_pct)
             # 현재가 위에 buy limit을 놓으면 즉시 시장가가 된다.
-            if entry >= close:
+            if not market and entry >= close:
                 return []
             stop_hint = entry - atr * REGRESSION_CHANNEL.stop_hint_atr_mult
         else:
@@ -235,7 +237,7 @@ class BtcRegressionChannel:
                 risk_multiplier=self.aligned_risk_mult if aligned else 1.0,
                 tranche=1,
                 max_tranches=1,
-                order_type="limit",
-                ttl_bars=REGRESSION_CHANNEL.limit_ttl_bars,
+                order_type="market" if market else "limit",
+                ttl_bars=0 if market else REGRESSION_CHANNEL.limit_ttl_bars,
             )
         ]

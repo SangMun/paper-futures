@@ -130,9 +130,18 @@ def test_이미_지정가보다_멀리_가버렸으면_시장가로_쫓지_않�
 
 def test_진입이격_범위를_검증한다():
     with pytest.raises(ValueError):
-        BtcRegressionChannel(entry_offset_pct=0)
+        BtcRegressionChannel(entry_offset_pct=-0.01)
     with pytest.raises(ValueError):
         BtcRegressionChannel(entry_offset_pct=0.2)
+
+
+def test_이격_0이면_이탈봉_종가_시장가():
+    signal = BtcRegressionChannel(entry_offset_pct=0).generate(
+        signal_prepared("long"), 100
+    )[0]
+    assert signal.order_type == "market"
+    assert signal.ttl_bars == 0
+    assert signal.entry == float(signal_prepared("long").frame("1h")["close"].iloc[100])
 
 
 def test_방향을_따로_끌수있다():

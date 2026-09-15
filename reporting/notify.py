@@ -49,6 +49,9 @@ class Notifier:
     btc_trade_url: str | None = None
     xrp_trade_url: str | None = None
     balance_url: str | None = None
+    # 계좌를 전략별로 나눠 돌릴 때 상태·잔고 채널을 공유하므로, 어느 계좌의
+    # 메시지인지 제목 앞에 붙인다. 단일 계좌면 빈 값이라 제목이 그대로다.
+    account: str = field(default_factory=lambda: env.get("PAPER_ACCOUNT") or "")
     timeout: float = 5.0
     quiet_after: int = 3            # 연속 실패 이 횟수부터는 출력하지 않는다
 
@@ -214,6 +217,8 @@ class Notifier:
         channel: str = "system",
         key: str = "",
     ) -> bool:
+        if self.account:
+            title = f"[{self.account}] {title}"
         return self._post(
             {
                 "embeds": [
