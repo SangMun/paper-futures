@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { enrichXrpCandles, mergeRawCandles } from "@/lib/market.mjs";
-import { RegressionChart, TradeHistory } from "../BtcDashboard";
+import { AccountStrip, RegressionChart, TradeHistory, accountOf } from "../BtcDashboard";
 import type {
   Candle,
   DashboardData,
@@ -297,6 +297,7 @@ export function XrpPatternDashboard() {
   const selectedMonitors = monitors.filter((monitor) => monitor.timeframe === timeframe);
   const trades = (data.trades ?? []).filter((trade) => trade.symbol === "XRP_USDT");
   const positions = data.xrpPositions ?? [];
+  const account = accountOf(data, "xrp");
   const wins = trades.filter((trade) => trade.pnl > 0).length;
   const pnl = trades.reduce((sum, trade) => sum + trade.pnl, 0);
   const latestEntry = events.find((event) => event.action === "entry" && eventIsActive(event, monitors));
@@ -317,6 +318,8 @@ export function XrpPatternDashboard() {
           <span className={`status-dot ${liveStatus}`} /><span>{liveStatus === "online" ? "실시간 시세" : liveStatus === "stale" ? "스냅샷 대체" : "시세 연결 중"}</span><small>PAPER · READ ONLY</small>
         </div>
       </header>
+
+      <AccountStrip data={data} active="xrp" />
 
       <section className="market-heading xrp-heading">
         <div>
@@ -436,7 +439,7 @@ export function XrpPatternDashboard() {
       <section className="account-section xrp-account">
         <div className="section-heading"><div><span>ACCOUNT / SIGNALS</span><h2>XRP 페이퍼 상태</h2></div><p>계좌 {fmtKst(data.generatedAt)} · 시세 {fmtKst(lastUpdate)}</p></div>
         <div className="metric-grid">
-          <article className="metric-card"><span className="metric-label">전체 잔고</span><strong>{money.format(data.account.balance)} USDT</strong><span className="metric-detail">BTC·XRP 통합 페이퍼 계좌</span></article>
+          <article className="metric-card"><span className="metric-label">계좌 잔고</span><strong>{money.format(account.balance)} USDT</strong><span className="metric-detail">XRP 패턴 전용 페이퍼 계좌</span></article>
           <article className="metric-card"><span className="metric-label">XRP 오픈 포지션</span><strong>{positions.length}건</strong><span className="metric-detail">패턴별 1회 진입</span></article>
           <article className="metric-card"><span className="metric-label">완료 거래 / 승률</span><strong>{trades.length} / {trades.length ? `${(wins / trades.length * 100).toFixed(1)}%` : "—"}</strong><span className="metric-detail">AWS 실제 페이퍼 로그</span></article>
           <article className={`metric-card ${pnl >= 0 ? "positive" : "negative"}`}><span className="metric-label">XRP 누적 손익</span><strong>{pnl >= 0 ? "+" : ""}{money.format(pnl)} USDT</strong><span className="metric-detail">진입 비용 포함</span></article>

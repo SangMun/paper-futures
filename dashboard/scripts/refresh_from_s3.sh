@@ -49,5 +49,6 @@ ts = d["generatedAt"]
 when = datetime.datetime.fromtimestamp(ts, datetime.UTC)
 age = (datetime.datetime.now(datetime.UTC) - when).total_seconds() / 3600
 print(f"스냅샷 {when:%Y-%m-%d %H:%M UTC} ({age:.1f}시간 전)")
-print(f"잔고   {(d.get('account') or {}).get('balance', 0):.2f} USDT")
+for name, acct in (d.get("accounts") or {"단일": d.get("account") or {}}).items():
+    print(f"잔고   {name:<8} {acct.get('balance', 0):>9.2f} USDT  거래 {acct.get('closedTrades', 0)}건")
 PYEOF

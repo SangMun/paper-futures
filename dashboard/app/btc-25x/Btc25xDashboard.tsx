@@ -9,8 +9,10 @@ import {
 } from "@/lib/market.mjs";
 import type { Btc25xPoint } from "@/lib/market.mjs";
 import {
+  AccountStrip,
   RegressionChart,
   TradeHistory,
+  accountOf,
 } from "../BtcDashboard";
 import type {
   Candle,
@@ -254,10 +256,11 @@ export function Btc25xDashboard() {
   const previousPrice = frames["5m"].at(-2)?.close ?? marketPrice;
   const change = previousPrice ? marketPrice / previousPrice - 1 : 0;
   const direction = point.side === "long" ? "상승 채널" : point.side === "short" ? "하락 채널" : "판정 대기";
-  const margin = data.account.balance * config.marginFraction;
+  const account = accountOf(data, "btc25x");
+  const margin = account.balance * config.marginFraction;
   const notional = margin * config.leverage;
-  const targetProfit = data.account.balance * config.accountTakeProfitPct;
-  const estimatedStopLoss = data.account.balance * 0.0216;
+  const targetProfit = account.balance * config.accountTakeProfitPct;
+  const estimatedStopLoss = account.balance * 0.0216;
   const positions = data.positions25x ?? [];
   const trades = (data.trades ?? []).filter((trade) => trade.strategy === "btc_regime_25x");
   const paused = config.pausedUntil > (lastUpdate ?? data.generatedAt);
@@ -281,6 +284,8 @@ export function Btc25xDashboard() {
           <span className={`status-dot ${liveStatus}`} /><span>{liveStatus === "online" ? "실시간 시세" : liveStatus === "stale" ? "스냅샷 대체" : "시세 연결 중"}</span><small>PAPER · READ ONLY</small>
         </div>
       </header>
+
+      <AccountStrip data={data} active="btc25x" />
 
       <section className="market-heading leverage-heading">
         <div>

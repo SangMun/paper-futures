@@ -110,7 +110,17 @@ def enrich(frame):
     return candles
 
 
+def channel_entry_offset() -> float:
+    """실시간 봇에 등록된 회귀채널 전략의 진입 이격. 대시보드가 다른 값을 보여주면 안 된다."""
+
+    for strategy in build_strategies()["BTC_USDT"]:
+        if strategy.name == "btc_regression_channel":
+            return float(strategy.entry_offset_pct)
+    return 0.01
+
+
 def strategy_snapshot(candles_by_tf: dict[str, list[dict]]) -> dict:
+    offset = channel_entry_offset()
     hourly = candles_by_tf["1h"]
     major = candles_by_tf["4h"]
     latest = hourly[-1]
@@ -132,7 +142,7 @@ def strategy_snapshot(candles_by_tf: dict[str, list[dict]]) -> dict:
     ):
         signal = "short_watch"
         side = "short"
-        entry = latest["upper"] * 1.02
+        entry = latest["upper"] * (1 + offset)
         target = latest["upper"]
     elif (
         slope > 0
@@ -143,7 +153,7 @@ def strategy_snapshot(candles_by_tf: dict[str, list[dict]]) -> dict:
     ):
         signal = "long_watch"
         side = "long"
-        entry = latest["lower"] * 0.98
+        entry = latest["lower"] * (1 - offset)
         target = latest["lower"]
 
     close = latest_major["close"]
@@ -167,7 +177,7 @@ def strategy_snapshot(candles_by_tf: dict[str, list[dict]]) -> dict:
         "upper": latest["upper"],
         "lower": latest["lower"],
         "majorRegime": regime,
-        "entryOffsetPct": 0.02,
+        "entryOffsetPct": offset,
         "channelLength": 100,
         "channelWidthMult": 2.0,
         "executionTimeframe": "1h",
@@ -382,27 +392,57 @@ def load_trade_history(trade_path: Path, signal_path: Path, limit: int = 100) ->
     return sorted(completed, key=lambda trade: trade["exitTime"], reverse=True)[:limit]
 
 
+# 계좌 이름 -> 대시보드 라벨. 폴더 이름은 deploy/paper-futures@.service 인스턴스와 같다.
+ACCOUNTS = {
+    "btcchan": "BTC 회귀채널",
+    "btc25x": "BTC 25×",
+    "xrp": "XRP 패턴",
+}
+INITIAL_BALANCE = 1000.0
+
+
+def load_account(root: Path, name: str) -> dict:
+    """계좌 폴더가 있으면 그것, 없으면 루트(단일 계좌 시절)로 대신한다."""
+
+    directory = root / name if (root / name).is_dir() else root
+    return {
+        "name": name,
+        "dir": directory,
+        "state": load_state(directory / "state.json"),
+        "trades": load_trade_history(directory / "trades.csv", directory / "signals.jsonl"),
+    }
+
+
+def account_summary(acct: dict) -> dict:
+    state = acct["state"]
+    balance = finite(state.get("balance")) or 0.0
+    return {
+        "name": acct["name"],
+        "label": ACCOUNTS[acct["name"]],
+        "balance": balance,
+        "dayStartBalance": finite(state.get("day_start_balance")) or 0.0,
+        "dayKey": state.get("day_key", ""),
+        "initialBalance": INITIAL_BALANCE,
+        "returnPct": (balance / INITIAL_BALANCE - 1.0) * 100.0,
+        "closedTrades": len(acct["trades"]),
+        "openPositions": len(state.get("positions", [])),
+        "realizedPnl": sum(t.get("pnl", 0.0) for t in acct["trades"]),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--state-file",
-        type=Path,
-        default=ROOT / "data" / "state.json",
-    )
     parser.add_argument(
         "--output",
         type=Path,
         default=Path(__file__).resolve().parents[1] / "public" / "btc-dashboard.json",
     )
     parser.add_argument(
-        "--trade-file",
+        "--data-dir",
         type=Path,
-        default=ROOT / "data" / "trades.csv",
-    )
-    parser.add_argument(
-        "--signal-file",
-        type=Path,
-        default=ROOT / "data" / "signals.jsonl",
+        default=ROOT / "data",
+        help="계좌별 폴더(btcchan/btc25x/xrp)가 있는 데이터 루트. "
+             "폴더가 없으면 루트의 단일 계좌 파일로 대신한다.",
     )
     args = parser.parse_args()
 
@@ -417,7 +457,10 @@ def main() -> int:
             if timeframe != "1m"
         }
 
-    state = load_state(args.state_file)
+    accounts = {name: load_account(args.data_dir, name) for name in ACCOUNTS}
+    state = accounts["btcchan"]["state"]
+    state_25x = accounts["btc25x"]["state"]
+    state_xrp = accounts["xrp"]["state"]
     minute = candles_by_tf["1m"]
     latest = minute[-1]
     previous = minute[-2]
@@ -435,13 +478,13 @@ def main() -> int:
     ]
     positions_25x = [
         position
-        for position in state.get("positions", [])
+        for position in state_25x.get("positions", [])
         if position.get("symbol") == "BTC_USDT"
         and position.get("strategy") == "btc_regime_25x"
     ]
     xrp_positions = [
         position
-        for position in state.get("positions", [])
+        for position in state_xrp.get("positions", [])
         if position.get("symbol") == "XRP_USDT"
         and str(position.get("strategy", "")).startswith("xrp_patterns.")
     ]
@@ -456,11 +499,10 @@ def main() -> int:
             "changePct": change_pct,
         },
         "strategy": strategy_snapshot(candles_by_tf),
-        "account": {
-            "balance": finite(state.get("balance")) or 0.0,
-            "dayStartBalance": finite(state.get("day_start_balance")) or 0.0,
-            "dayKey": state.get("day_key", ""),
-        },
+        "account": account_summary(accounts["btcchan"]),
+        # 2026-09-15부터 계좌를 전략별 프로세스 셋으로 나눴다. 페이지마다
+        # 자기 계좌를 보여주고, 세 계좌 요약은 모든 페이지 상단에 같이 띄운다.
+        "accounts": {name: account_summary(acct) for name, acct in accounts.items()},
         "positions": positions,
         "positions25x": positions_25x,
         "xrpMarket": {
@@ -472,7 +514,7 @@ def main() -> int:
         "xrpPositions": xrp_positions,
         "xrpCandles": xrp_candles_by_tf,
         "xrpPatterns": xrp_pattern_monitors(),
-        "xrpSignals": load_signal_events(args.signal_file),
+        "xrpSignals": load_signal_events(accounts["xrp"]["dir"] / "signals.jsonl"),
         "strategy25x": {
             "channelLength": BTC_REGIME_25X.channel_length,
             "channelWidthMult": BTC_REGIME_25X.channel_width_mult,
@@ -490,11 +532,14 @@ def main() -> int:
             "makerRate": FEES.maker_rate,
             "maxDailyEntries": BTC_REGIME_25X.max_daily_entries,
             "consecutiveLossLimit": BTC_REGIME_25X.consecutive_loss_limit,
-            "dailyEntries": state.get("daily_entries", {}).get("btc_regime_25x", 0),
-            "consecutiveLosses": state.get("consecutive_losses", {}).get("btc_regime_25x", 0),
-            "pausedUntil": state.get("paused_until", {}).get("btc_regime_25x", 0),
+            "dailyEntries": state_25x.get("daily_entries", {}).get("btc_regime_25x", 0),
+            "consecutiveLosses": state_25x.get("consecutive_losses", {}).get("btc_regime_25x", 0),
+            "pausedUntil": state_25x.get("paused_until", {}).get("btc_regime_25x", 0),
         },
-        "trades": load_trade_history(args.trade_file, args.signal_file),
+        "trades": sorted(
+            (t for acct in accounts.values() for t in acct["trades"]),
+            key=lambda t: t["exitTime"], reverse=True,
+        ),
         "candles": candles_by_tf,
     }
 

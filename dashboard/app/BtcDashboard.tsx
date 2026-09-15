@@ -105,6 +105,21 @@ export type TradeRecord = {
   holdingSeconds: number;
 };
 
+export type AccountName = "btcchan" | "btc25x" | "xrp";
+
+export type AccountSummary = {
+  name?: AccountName;
+  label?: string;
+  balance: number;
+  dayStartBalance: number;
+  dayKey: string;
+  initialBalance?: number;
+  returnPct?: number;
+  closedTrades?: number;
+  openPositions?: number;
+  realizedPnl?: number;
+};
+
 export type DashboardData = {
   generatedAt: number;
   source: string;
@@ -131,11 +146,9 @@ export type DashboardData = {
     executionTimeframe: string;
     contextTimeframe: string;
   };
-  account: {
-    balance: number;
-    dayStartBalance: number;
-    dayKey: string;
-  };
+  account: AccountSummary;
+  // 2026-09-15부터 전략별 계좌 셋. 키는 서버 인스턴스 이름(btcchan / btc25x / xrp).
+  accounts?: Record<AccountName, AccountSummary>;
   positions: Position[];
   positions25x?: Position[];
   strategy25x?: {
@@ -369,6 +382,7 @@ export function RegressionChart({
   instrumentLabel = "비트코인",
   priceDigits = 1,
   trades = [],
+  entryOffsetPct = 0.01,
 }: {
   candles: Candle[];
   timeframe: Timeframe;
@@ -384,6 +398,7 @@ export function RegressionChart({
   instrumentLabel?: string;
   priceDigits?: number;
   trades?: TradeRecord[];
+  entryOffsetPct?: number;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -646,8 +661,8 @@ export function RegressionChart({
     const lastChannel = visible.at(-1);
     if (showChannel && timeframe === "1h" && lastChannel?.upper && lastChannel.lower) {
       const levels = [
-        { value: lastChannel.upper * 1.02, color: "rgba(255,111,107,.55)", label: "SHORT +2%" },
-        { value: lastChannel.lower * 0.98, color: "rgba(213,255,99,.55)", label: "LONG -2%" },
+        { value: lastChannel.upper * (1 + entryOffsetPct), color: "rgba(255,111,107,.55)", label: `SHORT +${(entryOffsetPct * 100).toFixed(0)}%` },
+        { value: lastChannel.lower * (1 - entryOffsetPct), color: "rgba(213,255,99,.55)", label: `LONG -${(entryOffsetPct * 100).toFixed(0)}%` },
       ];
       levels.forEach((level) => {
         if (level.value < minPrice || level.value > maxPrice) return;
@@ -791,7 +806,7 @@ export function RegressionChart({
       ctx.stroke();
       ctx.setLineDash([]);
     }
-  }, [visible, visiblePivots, visibleMarks, timeframe, showChannel, showAverages, averageMode, showVwap, showPivots, dimensions, hoverIndex, chartPriceFormatter]);
+  }, [visible, visiblePivots, visibleMarks, timeframe, showChannel, showAverages, averageMode, showVwap, showPivots, dimensions, hoverIndex, chartPriceFormatter, entryOffsetPct]);
 
   const resetToLive = () => {
     setBarsVisible(Math.min(VISIBLE_BARS[timeframe], candles.length));
@@ -1023,6 +1038,43 @@ function MomentumStrip({ candle, timeframe }: { candle: Candle | undefined; time
         <small>현재 변동성</small>
       </div>
     </div>
+  );
+}
+
+const ACCOUNT_ORDER: { name: AccountName; label: string; href: string }[] = [
+  { name: "btcchan", label: "BTC 회귀채널", href: "/" },
+  { name: "btc25x", label: "BTC 25×", href: "/btc-25x" },
+  { name: "xrp", label: "XRP 패턴", href: "/xrp-patterns" },
+];
+
+/** 페이지가 보여줄 계좌. 분리 전 스냅샷(accounts 없음)이면 단일 계좌로 대신한다. */
+export function accountOf(data: DashboardData, name: AccountName): AccountSummary {
+  return data.accounts?.[name] ?? data.account;
+}
+
+/** 세 계좌 요약. 모든 페이지 상단에 같이 띄워 어느 전략이 벌고 잃는지 한눈에 비교한다. */
+export function AccountStrip({ data, active }: { data: DashboardData; active: AccountName }) {
+  if (!data.accounts) return null;
+  return (
+    <section className="account-strip" aria-label="계좌별 성과">
+      {ACCOUNT_ORDER.map(({ name, label, href }) => {
+        const acct = data.accounts?.[name];
+        if (!acct) return null;
+        const initial = acct.initialBalance ?? 1000;
+        const pnl = acct.balance - initial;
+        const pct = acct.returnPct ?? (initial ? (pnl / initial) * 100 : 0);
+        const tone = pnl > 0 ? "positive" : pnl < 0 ? "negative" : "";
+        return (
+          <Link key={name} href={href} className={`metric-card account-card ${tone} ${name === active ? "active" : ""}`}>
+            <span className="metric-label">{acct.label ?? label}</span>
+            <strong>{balanceFormatter.format(acct.balance)} USDT</strong>
+            <span className="metric-detail">
+              {pnl >= 0 ? "+" : ""}{balanceFormatter.format(pnl)} ({pct >= 0 ? "+" : ""}{pct.toFixed(2)}%) · 거래 {acct.closedTrades ?? 0}건 · 보유 {acct.openPositions ?? 0}
+            </span>
+          </Link>
+        );
+      })}
+    </section>
   );
 }
 
@@ -1326,8 +1378,8 @@ export function BtcDashboard() {
 
   const strategyView = useMemo(() => {
     if (!liveCandles) return null;
-    return buildLiveStrategy(liveCandles["1h"], liveCandles["4h"], 0.02);
-  }, [liveCandles]);
+    return buildLiveStrategy(liveCandles["1h"], liveCandles["4h"], data?.strategy.entryOffsetPct ?? 0.01);
+  }, [liveCandles, data?.strategy.entryOffsetPct]);
 
   useEffect(() => {
     const live = strategyView?.live;
@@ -1343,7 +1395,7 @@ export function BtcDashboard() {
   }, [strategyView]);
 
   const chartTrades = useMemo(
-    () => (data?.trades ?? []).filter((trade) => trade.symbol.startsWith("BTC")),
+    () => (data?.trades ?? []).filter((trade) => trade.strategy === "btc_regression_channel"),
     [data?.trades],
   );
 
@@ -1365,9 +1417,10 @@ export function BtcDashboard() {
   const marketPrice = minute.at(-1)?.close ?? data.market.price;
   const previousMinute = minute.at(-2)?.close ?? marketPrice;
   const marketChangePct = previousMinute ? (marketPrice / previousMinute - 1) * 100 : 0;
-  const dailyPnl = data.account.balance - data.account.dayStartBalance;
-  const dailyPct = data.account.dayStartBalance
-    ? (dailyPnl / data.account.dayStartBalance) * 100
+  const account = accountOf(data, "btcchan");
+  const dailyPnl = account.balance - account.dayStartBalance;
+  const dailyPct = account.dayStartBalance
+    ? (dailyPnl / account.dayStartBalance) * 100
     : 0;
   const slopePct = liveStrategy.slope && marketPrice
     ? (liveStrategy.slope / marketPrice) * 100
@@ -1398,6 +1451,8 @@ export function BtcDashboard() {
           <small>PAPER · READ ONLY</small>
         </div>
       </header>
+
+      <AccountStrip data={data} active="btcchan" />
 
       <section className="market-heading">
         <div>
@@ -1477,6 +1532,7 @@ export function BtcDashboard() {
             historyExhausted={historyExhausted[timeframe] === true}
             onLoadOlder={loadOlder}
             trades={chartTrades}
+            entryOffsetPct={data.strategy.entryOffsetPct}
           />
           {showMomentum && <MomentumStrip candle={selectedMomentum} timeframe={timeframe} />}
           <footer className="chart-footer">
@@ -1534,7 +1590,7 @@ export function BtcDashboard() {
                 <i>02</i><div><b>반대편 경계 이탈</b><span>직전 봉 대비 신규 꼬리 돌파</span></div>
               </li>
               <li>
-                <i>03</i><div><b>2% 밖 지정가</b><span>12시간 내 미체결 시 취소</span></div>
+                <i>03</i><div><b>{(data.strategy.entryOffsetPct * 100).toFixed(0)}% 밖 지정가</b><span>12시간 내 미체결 시 취소</span></div>
               </li>
               <li>
                 <i>04</i><div><b>채널선 절반 익절</b><span>나머지 물량 ATR 트레일링</span></div>
@@ -1552,8 +1608,8 @@ export function BtcDashboard() {
         <div className="metric-grid">
           <MetricCard
             label="총 잔고"
-            value={`${balanceFormatter.format(data.account.balance)} USDT`}
-            detail="실현 잔고"
+            value={`${balanceFormatter.format(account.balance)} USDT`}
+            detail="회귀채널 계좌 실현 잔고"
           />
           <MetricCard
             label="오늘 손익"
@@ -1616,7 +1672,7 @@ export function BtcDashboard() {
         </article>
       </section>
 
-      <TradeHistory trades={data.trades ?? []} generatedAt={data.generatedAt} />
+      <TradeHistory trades={chartTrades} generatedAt={data.generatedAt} initialSymbol="BTC" />
 
       <footer className="page-footer">
         <span>DATA · {liveStatus === "online" ? "Gate.io live public candles" : data.source}</span>
