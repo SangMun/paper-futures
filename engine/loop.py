@@ -1996,13 +1996,13 @@ def main() -> int:
     print(f"종목 {[s.contract for s in engine.symbols]}")
     print(f"전략 {tags}")
     engine.notifier.text(
-        f"🟢 페이퍼 봇 시작{label}\n"
-        f"잔고 {engine.bot_state.balance:,.2f} USDT · 전략 {', '.join(tags)}"
+        "🟢 페이퍼 봇 시작\n"
+        f"잔고 {engine.bot_state.balance:,.2f} USDT"
     )
     try:
         engine.run()
     finally:
-        engine.notifier.text(f"🔴 페이퍼 봇 종료{label}")
+        engine.notifier.text("🔴 페이퍼 봇 종료")
         engine.close()
     return 0
 

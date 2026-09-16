@@ -118,6 +118,7 @@ export type AccountSummary = {
   closedTrades?: number;
   openPositions?: number;
   realizedPnl?: number;
+  legacyTrades?: number;   // 2026-09-15 분리 전 합산 계좌에서 이 전략이 낸 체결 수
 };
 
 export type DashboardData = {
@@ -1069,7 +1070,7 @@ export function AccountStrip({ data, active }: { data: DashboardData; active: Ac
             <span className="metric-label">{acct.label ?? label}</span>
             <strong>{balanceFormatter.format(acct.balance)} USDT</strong>
             <span className="metric-detail">
-              {pnl >= 0 ? "+" : ""}{balanceFormatter.format(pnl)} ({pct >= 0 ? "+" : ""}{pct.toFixed(2)}%) · 거래 {acct.closedTrades ?? 0}건 · 보유 {acct.openPositions ?? 0}
+              {pnl >= 0 ? "+" : ""}{balanceFormatter.format(pnl)} ({pct >= 0 ? "+" : ""}{pct.toFixed(2)}%) · 거래 {acct.closedTrades ?? 0}건{acct.legacyTrades ? ` (분리 전 ${acct.legacyTrades})` : ""} · 보유 {acct.openPositions ?? 0}
             </span>
           </Link>
         );

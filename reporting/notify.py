@@ -199,6 +199,11 @@ class Notifier:
     # ---------------------------------------------------------------- 전송
 
     def text(self, message: str) -> bool:
+        # 계좌명은 첫 줄 끝에 붙인다. 생존 확인처럼 계좌마다 같은 문장이 오면
+        # 어느 계좌 잔고인지 알 길이 없다.
+        if self.account:
+            head, sep, tail = message.partition("\n")
+            message = f"{head} [{self.account}]{sep}{tail}"
         return self._post({"content": message[:2000]}, "system")
 
     def _reset_throttle(self) -> None:

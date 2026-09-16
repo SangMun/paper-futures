@@ -401,21 +401,48 @@ ACCOUNTS = {
 INITIAL_BALANCE = 1000.0
 
 
+# 계좌 -> 그 계좌가 돌리는 전략 이름 접두사. 분리 전 합산 계좌(2026-08-07~09-15)의
+# 체결을 전략별로 갈라 각 계좌 이력에 이어 붙이는 데 쓴다.
+ACCOUNT_STRATEGY_PREFIX = {
+    "btcchan": "btc_regression_channel",
+    "btc25x": "btc_regime_25x",
+    "xrp": "xrp_patterns",
+}
+
+
 def load_account(root: Path, name: str) -> dict:
-    """계좌 폴더가 있으면 그것, 없으면 루트(단일 계좌 시절)로 대신한다."""
+    """계좌 폴더가 있으면 그것, 없으면 루트(단일 계좌 시절)로 대신한다.
+
+    계좌 폴더가 있을 때 루트의 trades.csv는 분리 전 합산 계좌 기록이다.
+    이 계좌 전략의 체결만 골라 뒤에 붙인다 — 잔고는 새 계좌 것이지만
+    전략의 성적은 분리 전부터 이어서 봐야 한다.
+    """
 
     directory = root / name if (root / name).is_dir() else root
+    trades = load_trade_history(directory / "trades.csv", directory / "signals.jsonl")
+    if directory != root:
+        prefix = ACCOUNT_STRATEGY_PREFIX[name]
+        legacy = [
+            dict(trade, legacy=True)
+            for trade in load_trade_history(root / "trades.csv", root / "signals.jsonl", limit=1000)
+            if trade["strategy"].startswith(prefix)
+        ]
+        trades = sorted(trades + legacy, key=lambda t: t["exitTime"], reverse=True)
     return {
         "name": name,
         "dir": directory,
         "state": load_state(directory / "state.json"),
-        "trades": load_trade_history(directory / "trades.csv", directory / "signals.jsonl"),
+        "trades": trades,
     }
 
 
 def account_summary(acct: dict) -> dict:
+    """계좌 카드 요약. 잔고와 짝이 맞도록 분리 후 체결만 센다 — 분리 전 이력은
+    trades 목록에만 남긴다."""
+
     state = acct["state"]
     balance = finite(state.get("balance")) or 0.0
+    current = [t for t in acct["trades"] if not t.get("legacy")]
     return {
         "name": acct["name"],
         "label": ACCOUNTS[acct["name"]],
@@ -424,9 +451,10 @@ def account_summary(acct: dict) -> dict:
         "dayKey": state.get("day_key", ""),
         "initialBalance": INITIAL_BALANCE,
         "returnPct": (balance / INITIAL_BALANCE - 1.0) * 100.0,
-        "closedTrades": len(acct["trades"]),
+        "closedTrades": len(current),
         "openPositions": len(state.get("positions", [])),
-        "realizedPnl": sum(t.get("pnl", 0.0) for t in acct["trades"]),
+        "realizedPnl": sum(t.get("pnl", 0.0) for t in current),
+        "legacyTrades": len(acct["trades"]) - len(current),
     }
 
 
