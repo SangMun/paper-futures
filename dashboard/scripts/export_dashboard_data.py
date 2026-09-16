@@ -437,12 +437,12 @@ def load_account(root: Path, name: str) -> dict:
 
 
 def account_summary(acct: dict) -> dict:
-    """계좌 카드 요약. 잔고와 짝이 맞도록 분리 후 체결만 센다 — 분리 전 이력은
-    trades 목록에만 남긴다."""
+    """계좌 카드 요약. 분리 전 손익을 계좌 잔고에 더해 뒀으므로(2026-09-16)
+    거래수·손익도 분리 전 것까지 같이 센다."""
 
     state = acct["state"]
     balance = finite(state.get("balance")) or 0.0
-    current = [t for t in acct["trades"] if not t.get("legacy")]
+    trades = acct["trades"]
     return {
         "name": acct["name"],
         "label": ACCOUNTS[acct["name"]],
@@ -451,10 +451,10 @@ def account_summary(acct: dict) -> dict:
         "dayKey": state.get("day_key", ""),
         "initialBalance": INITIAL_BALANCE,
         "returnPct": (balance / INITIAL_BALANCE - 1.0) * 100.0,
-        "closedTrades": len(current),
+        "closedTrades": len(trades),
         "openPositions": len(state.get("positions", [])),
-        "realizedPnl": sum(t.get("pnl", 0.0) for t in current),
-        "legacyTrades": len(acct["trades"]) - len(current),
+        "realizedPnl": sum(t.get("pnl", 0.0) for t in trades),
+        "legacyTrades": sum(1 for t in trades if t.get("legacy")),
     }
 
 

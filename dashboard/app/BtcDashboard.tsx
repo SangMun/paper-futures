@@ -1070,7 +1070,7 @@ export function AccountStrip({ data, active }: { data: DashboardData; active: Ac
             <span className="metric-label">{acct.label ?? label}</span>
             <strong>{balanceFormatter.format(acct.balance)} USDT</strong>
             <span className="metric-detail">
-              {pnl >= 0 ? "+" : ""}{balanceFormatter.format(pnl)} ({pct >= 0 ? "+" : ""}{pct.toFixed(2)}%) · 거래 {acct.closedTrades ?? 0}건{acct.legacyTrades ? ` (분리 전 ${acct.legacyTrades})` : ""} · 보유 {acct.openPositions ?? 0}
+              {pnl >= 0 ? "+" : ""}{balanceFormatter.format(pnl)} ({pct >= 0 ? "+" : ""}{pct.toFixed(2)}%) · 거래 {acct.closedTrades ?? 0}건 · 보유 {acct.openPositions ?? 0}
             </span>
           </Link>
         );
