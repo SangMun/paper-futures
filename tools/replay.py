@@ -69,6 +69,7 @@ def main() -> int:
     ap.add_argument("--symbol", help="특정 종목만")
     ap.add_argument("--strategy", help="특정 전략만 (로그 태그)")
     ap.add_argument("--bars", type=int, help="재생할 봉 수 (기본: 전 구간)")
+    ap.add_argument("--last", type=int, help="가장 최근 N봉만 (최근 구간 검증용)")
     ap.add_argument("--warmup", type=int, default=500)
     ap.add_argument("--balance", type=float, default=1_000.0)
     ap.add_argument(
@@ -120,6 +121,7 @@ def main() -> int:
         balance=args.balance,
         warmup=args.warmup,
         max_bars=args.bars,
+        last=args.last,
         progress_every=5_000,
         risk=RISK if args.with_brakes else None,
         ticks=args.ticks,
