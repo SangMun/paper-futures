@@ -12,10 +12,12 @@ from __future__ import annotations
 import json
 from numbers import Real
 import json
+import subprocess
 import time
 from dataclasses import dataclass, field
 
 import httpx
+from pathlib import Path
 
 from config import env
 from config.settings import (
@@ -26,6 +28,29 @@ from config.settings import (
     DISCORD_WEBHOOK_ENV,
     DISCORD_XRP_TRADE_WEBHOOK_ENV,
 )
+
+
+def code_revision() -> str:
+    """실행 중인 코드의 커밋. 성과가 어느 코드에서 나왔는지 알림 로그만으로 추적한다.
+
+    추적 대상 파일에 커밋하지 않은 수정이 있으면 ``+dirty``를 붙인다.
+    git이 없거나 저장소가 아니면 매매를 막지 않고 ``unknown``을 돌려준다.
+    """
+
+    root = Path(__file__).resolve().parent.parent
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(root), *args],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout.strip()
+
+    try:
+        sha = git("rev-parse", "--short", "HEAD")
+        dirty = git("status", "--porcelain", "--untracked-files=no")
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return f"{sha}+dirty" if dirty else sha
 
 
 # 디스코드 임베드 색상

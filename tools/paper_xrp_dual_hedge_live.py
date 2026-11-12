@@ -32,7 +32,7 @@ from engine.dual_hedge import (
 )
 from indicators.atr import atr
 from reporting.logs import SignalLog
-from reporting.notify import COLOR_ENTRY, COLOR_LOSS, COLOR_WARN, COLOR_WIN, Notifier
+from reporting.notify import COLOR_ENTRY, COLOR_LOSS, COLOR_WARN, COLOR_WIN, Notifier, code_revision
 from strategies.xrp_dual_hedge import squeeze_breakout_ready
 
 
@@ -207,6 +207,7 @@ class PaperSession:
             "완료 pair": str(len(self.engine.results)),
             "이익보장가": lock,
             "트레일 스탑": stop,
+            "커밋": code_revision(),
         }
 
     def _send_status(self, label: str, ts: int) -> None:

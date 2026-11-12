@@ -36,7 +36,7 @@ from core.exchange import (
 from engine import state as st
 from engine.broker import Broker
 from reporting.logs import ACTION_ENTRY, ACTION_SKIP, SignalLog, TradeLog
-from reporting.notify import Notifier
+from reporting.notify import Notifier, code_revision
 from risk import exits as ex
 from risk import limits as lim
 
@@ -1997,7 +1997,8 @@ def main() -> int:
     print(f"전략 {tags}")
     engine.notifier.text(
         "🟢 페이퍼 봇 시작\n"
-        f"잔고 {engine.bot_state.balance:,.2f} USDT"
+        f"잔고 {engine.bot_state.balance:,.2f} USDT\n"
+        f"커밋 {code_revision()}"
     )
     try:
         engine.run()

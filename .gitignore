@@ -33,3 +33,6 @@ dashboard/*.tsbuildinfo
 
 # 개인 Codex 설정
 .codex/
+
+# 서버 배포 일시 중지 표시 (deploy/deploy.sh)
+DEPLOY_HOLD

@@ -1,0 +1,15 @@
+[Unit]
+Description=Pull-based deploy of paper-futures from GitHub
+Wants=network-online.target
+After=network-online.target
+
+# root로 돌아야 다른 서비스를 재시작할 수 있다. git·pip·pytest는 스크립트가 ubuntu로 낮춰 실행한다.
+#
+#   sudo cp deploy/paper-futures-deploy.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now paper-futures-deploy.timer
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/paper-futures/v2/deploy/deploy.sh
+TimeoutStartSec=600
