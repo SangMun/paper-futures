@@ -68,7 +68,10 @@ def backfill(
         if want_start < first - step:
             gaps.append((want_start, first))        # 과거쪽 확장
         if last + step < now:
-            gaps.append((last, now))                # 최근분 갱신
+            # 캐시 끝이 거래소 상한보다 오래되면 그 지점부터는 400으로 거부된다.
+            # 받을 수 있는 구간만 받고, 사이 구멍은 validate가 결측으로 보고한다.
+            # 지난 달 구멍은 tools.fetch_gate_archive로 메운다.
+            gaps.append((max(last, want_start), now))  # 최근분 갱신
 
     if not gaps:
         print("       이미 충분함, 건너뜀", flush=True)
