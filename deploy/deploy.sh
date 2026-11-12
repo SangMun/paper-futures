@@ -33,7 +33,9 @@ if command -v flock >/dev/null; then
 fi
 
 as_user() {
-    if [[ "$(id -un)" == "$RUN_AS" ]]; then "$@"; else runuser -u "$RUN_AS" -- "$@"; fi
+    # root(systemd·sudo)에서 내려갈 때 HOME이 /root로 남으면 pip 캐시·git 설정이 어긋난다.
+    if [[ "$(id -un)" == "$RUN_AS" ]]; then "$@"; else
+        runuser -u "$RUN_AS" -- env HOME="$(getent passwd "$RUN_AS" | cut -d: -f6)" "$@"; fi
 }
 g() { as_user git -C "$REPO_DIR" "$@"; }
 
