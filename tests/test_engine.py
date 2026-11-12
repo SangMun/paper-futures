@@ -104,6 +104,11 @@ def test_호가_단위로_반올림():
     assert bk.round_to_tick(60_000.123, BTC) == pytest.approx(60_000.1)
 
 
+def test_호가_하한과_상한은_가까운값으로_반올림하지_않는다():
+    assert bk.round_up_to_tick(1.01231, XRP) == pytest.approx(1.0124)
+    assert bk.round_down_to_tick(1.01239, XRP) == pytest.approx(1.0123)
+
+
 def test_청산이_잔고에_반영된다():
     b = bk.Broker(balance=1_000.0)
     net, fee = b.close("long", XRP, entry=1.0, exit_price=1.05, contracts=10)

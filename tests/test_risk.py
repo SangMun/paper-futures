@@ -185,6 +185,29 @@ def test_숏_청산가는_위쪽():
     assert sz.liquidation_price(1.0, "short", 10, 0.005) == pytest.approx(1.095)
 
 
+def test_격리청산가에는_실제배정증거금과_절사된계약수량을_쓴다():
+    # 100x를 요청했더라도 76계약(760 XRP)으로 절사되면 실제 명목가치는
+    # 1,000 USDT보다 작다. 레버리지 역수 근사 대신 MMR 등식으로 풀어야 한다.
+    assert sz.isolated_liquidation_price(
+        1.3045, "long", margin=10.0, contracts=76, multiplier=10.0,
+        maintenance_rate=0.005,
+    ) == pytest.approx((1.3045 - 10.0 / 760.0) / 0.995)
+    assert sz.isolated_liquidation_price(
+        1.3039, "short", margin=10.0, contracts=76, multiplier=10.0,
+        maintenance_rate=0.005,
+    ) == pytest.approx((1.3039 + 10.0 / 760.0) / 1.005)
+
+
+def test_격리청산가는_Gate_화면의_100x_예상청산가와_맞는다():
+    # 2026-10-24 Gate 화면: 100x 격리 숏, 진입 1.2831, 예상 청산가 1.2894.
+    # 증거금 = 명목가 1%. 청산 수수료를 넣으면 1.2885가 되어 화면과 다르다.
+    liq = sz.isolated_liquidation_price(
+        1.2831, "short", margin=1.2831 * 1000 / 100, contracts=100, multiplier=10.0,
+        maintenance_rate=0.005,
+    )
+    assert 1.2894 <= liq < 1.2895
+
+
 def test_최소_주문_단위_미달은_거절():
     """BTC 1계약 = 6 USDT. 잔고가 작고 손절이 넓으면 1계약도 못 산다."""
 

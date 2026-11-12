@@ -35,7 +35,7 @@ fi
 aws_args=(--profile "$profile" --region "$region" --no-cli-pager)
 
 backup_runtime() {
-    local day file found dir name
+    local day file found dir name experiment_dir
     day="$(date -u +%F)"
     found=0
 
@@ -55,6 +55,24 @@ backup_runtime() {
                 found=1
             fi
         done
+    done
+
+    # EXP-015는 전략별 CSV가 아니라 계좌별 JSONL/상태 파일을 쓴다.
+    # 백업이 기존 runtime 파일만 보면 포워드 실험 증거가 서버에만 남는다.
+    for name in xrp_dual_hedge_live xrp_dual_hedge_mark_live; do
+        experiment_dir="$bot_root/data/$name"
+        # 빈 디렉터리는 세션 구성만으로도 만들어질 수 있다. 실제 포워드 증거가
+        # 기록된 경우에만 성공으로 간주해 기존 "백업 대상 없음" 감시를 보존한다.
+        if [[ -d "$experiment_dir" ]] && find "$experiment_dir" -type f \
+            \( -name state.json -o -name events.jsonl \) -print -quit | grep -q .; then
+            "$aws_bin" "${aws_args[@]}" s3 sync \
+                "$experiment_dir/" \
+                "s3://$bucket/runtime/daily/$day/$name/" \
+                --exclude "*.tmp" \
+                --sse AES256 \
+                --only-show-errors
+            found=1
+        fi
     done
 
     if [[ "$found" -eq 0 ]]; then

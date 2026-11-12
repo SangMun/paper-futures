@@ -51,6 +51,37 @@ class FetchResult:
         return len(self.df)
 
 
+@dataclass(frozen=True)
+class FuturesContractMarket:
+    """공개 계약 정보에서 얻은 청산 감시 입력값.
+
+    ``mark_price``는 이번 REST 관측 시점의 값이다. 이는 구간 안 모든 Mark
+    움직임을 뜻하지 않으므로, 호출부는 직전 관측값과 현재값 사이만 판정한다.
+    """
+
+    contract: str
+    mark_price: float
+    maintenance_rate: float
+    taker_fee_rate: float
+    multiplier: float
+    risk_limit_base: float
+
+
+@dataclass(frozen=True)
+class FuturesRiskLimitTier:
+    """공개 risk-limit 표의 한 구간.
+
+    EXP-015는 첫 구간 이내의 포지션만 허용한다. 상위 구간의 deduction과
+    레버리지 한도는 개인 포지션의 선택 risk limit과 함께 다뤄야 한다.
+    """
+
+    contract: str
+    tier: int
+    maintenance_rate: float
+    risk_limit: float
+    deduction: float
+
+
 class GateClient:
     """공개 캔들 API 클라이언트.
 
@@ -82,7 +113,7 @@ class GateClient:
 
     # ---------------------------------------------------------------- 내부
 
-    def _get(self, endpoint: str, params: dict) -> list:
+    def _get(self, endpoint: str, params: dict) -> object:
         last_error: Exception | None = None
 
         for attempt in range(self._max_retries):
@@ -204,6 +235,64 @@ class GateClient:
             tf: self.fetch(spec.contract, tf, limit=limit, now_ts=now_ts)
             for tf in sorted(spec.required_timeframes, key=cd.interval_seconds)
         }
+
+    def fetch_contract_market(self, contract: str) -> "FuturesContractMarket":
+        """공개 계약 정보에서 Mark Price와 1단계 유지증거금률을 함께 읽는다.
+
+        이 호출은 개인 계정·주문 API가 아니다. ``maintenance_rate``는 Gate가
+        계약 정보에 제공하는 1단계 값이므로, 이 실험처럼 첫 risk-limit 구간보다
+        작은 포지션에만 그대로 쓸 수 있다. 큰 포지션의 구간별 MMR은 인증된
+        포지션 API 없이는 특정할 수 없다.
+        """
+
+        raw = self._get(f"/futures/usdt/contracts/{contract}", {})
+        if not isinstance(raw, dict):
+            raise ExchangeError(f"계약 정보 형식 오류: {contract}")
+        try:
+            returned = str(raw["name"])
+            mark_price = float(raw["mark_price"])
+            maintenance_rate = float(raw["maintenance_rate"])
+            taker_fee_rate = float(raw["taker_fee_rate"])
+            multiplier = float(raw["quanto_multiplier"])
+            risk_limit_base = float(raw["risk_limit_base"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ExchangeError(f"계약 정보 필드 오류: {contract}") from exc
+        if returned != contract:
+            raise ExchangeError(f"계약 정보 불일치: 요청={contract}, 응답={returned}")
+        if (
+            mark_price <= 0 or multiplier <= 0 or risk_limit_base <= 0
+            or not 0 <= maintenance_rate < 1 or not 0 <= taker_fee_rate < 1
+        ):
+            raise ExchangeError(f"계약 정보 값 범위 오류: {contract}")
+        return FuturesContractMarket(
+            contract=returned,
+            mark_price=mark_price,
+            maintenance_rate=maintenance_rate,
+            taker_fee_rate=taker_fee_rate,
+            multiplier=multiplier,
+            risk_limit_base=risk_limit_base,
+        )
+
+    def fetch_first_risk_limit_tier(self, contract: str) -> FuturesRiskLimitTier:
+        """공개 risk-limit 표에서 첫 유지증거금 구간을 읽는다."""
+
+        raw = self._get("/futures/usdt/risk_limit_tiers", {"contract": contract})
+        if not isinstance(raw, list):
+            raise ExchangeError(f"risk-limit 표 형식 오류: {contract}")
+        try:
+            first = min(raw, key=lambda row: int(row["tier"]))
+            tier = int(first["tier"])
+            maintenance_rate = float(first["maintenance_rate"])
+            risk_limit = float(first["risk_limit"])
+            deduction = float(first["deduction"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ExchangeError(f"risk-limit 표 필드 오류: {contract}") from exc
+        if tier != 1 or risk_limit <= 0 or deduction < 0 or not 0 <= maintenance_rate < 1:
+            raise ExchangeError(f"첫 risk-limit 구간 값 범위 오류: {contract}")
+        return FuturesRiskLimitTier(
+            contract=contract, tier=tier, maintenance_rate=maintenance_rate,
+            risk_limit=risk_limit, deduction=deduction,
+        )
 
     # ---------------------------------------------------------------- 수명
 

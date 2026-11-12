@@ -206,6 +206,50 @@ def liquidation_price(
     return entry * (1.0 - edge) if side == "long" else entry * (1.0 + edge)
 
 
+def isolated_liquidation_price(
+    entry: float,
+    side: str,
+    margin: float,
+    contracts: int,
+    multiplier: float,
+    maintenance_rate: float,
+    maintenance_deduction: float = 0.0,
+) -> float:
+    """USDT 무기한 격리 포지션의 MMR=100% 추정 청산 Mark Price.
+
+    Gate 공개 risk-limit 표의 ``maintenance_rate``·``deduction``과 실제 배정
+    증거금·계약 수량을 사용한다. 청산 수수료는 넣지 않는다. 2026-10-24 Gate 화면의
+    100x 숏(진입 1.2831) 예상 청산가 1.2894가 MMR만 쓴 값(1.28948)과 맞았고, 수수료를
+    넣은 값(1.2885)과는 달랐다. 레버리지의
+    역수만 쓰는 근사식과 달리 계약 수량의 절사 때문에 생긴 실제 명목가치도
+    반영한다.
+
+    이 값은 인증된 실제 포지션의 ``liq_price``를 대체하지 않는다. 펀딩,
+    증거금 수동 조정, 상위 risk-limit 구간 및 거래소의 부분청산은 개인
+    포지션 상태가 필요하다.
+    """
+
+    if side not in ("long", "short"):
+        raise SizingError(f"side는 long/short: {side!r}")
+    if not math.isfinite(entry) or entry <= 0:
+        raise SizingError(f"진입가는 0보다 큰 유한값이어야 한다: {entry}")
+    if not math.isfinite(margin) or margin <= 0:
+        raise SizingError(f"격리증거금은 0보다 큰 유한값이어야 한다: {margin}")
+    if isinstance(contracts, bool) or not isinstance(contracts, int) or contracts <= 0:
+        raise SizingError(f"계약 수는 양의 정수여야 한다: {contracts}")
+    if not math.isfinite(multiplier) or multiplier <= 0:
+        raise SizingError(f"계약승수는 0보다 큰 유한값이어야 한다: {multiplier}")
+    if not math.isfinite(maintenance_rate) or not 0 <= maintenance_rate < 1:
+        raise SizingError(f"유지증거금률 범위 오류: {maintenance_rate}")
+    if not math.isfinite(maintenance_deduction) or maintenance_deduction < 0:
+        raise SizingError(f"유지증거금 deduction 범위 오류: {maintenance_deduction}")
+
+    units = contracts * multiplier
+    if side == "long":
+        return (entry - (margin + maintenance_deduction) / units) / (1.0 - maintenance_rate)
+    return (entry + (margin + maintenance_deduction) / units) / (1.0 + maintenance_rate)
+
+
 def size_position(
     symbol: str,
     side: str,

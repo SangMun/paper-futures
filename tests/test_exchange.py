@@ -135,6 +135,45 @@ def test_fetch_요청_파라미터_확인():
     assert seen == {"contract": "XRP_USDT", "interval": "1h", "limit": "250"}
 
 
+def test_공개계약정보에서_mark_price와_유지증거금률을_읽는다():
+    def handler(request):
+        assert request.url.path == "/api/v4/futures/usdt/contracts/XRP_USDT"
+        assert not request.url.params
+        return httpx.Response(200, json={
+            "name": "XRP_USDT", "mark_price": "1.3042",
+            "maintenance_rate": "0.005", "taker_fee_rate": "0.00075", "quanto_multiplier": "10",
+            "risk_limit_base": "50000",
+        })
+
+    with stub(handler) as client:
+        market = client.fetch_contract_market("XRP_USDT")
+
+    assert market.contract == "XRP_USDT"
+    assert market.mark_price == 1.3042
+    assert market.maintenance_rate == 0.005
+    assert market.taker_fee_rate == 0.00075
+    assert market.multiplier == 10.0
+    assert market.risk_limit_base == 50_000.0
+
+
+def test_공개_risk_limit표에서_첫_유지증거금_구간을_읽는다():
+    def handler(request):
+        assert request.url.path == "/api/v4/futures/usdt/risk_limit_tiers"
+        assert dict(request.url.params) == {"contract": "XRP_USDT"}
+        return httpx.Response(200, json=[
+            {"tier": 2, "maintenance_rate": "0.0066", "risk_limit": "100000", "deduction": "80"},
+            {"tier": 1, "maintenance_rate": "0.005", "risk_limit": "50000", "deduction": "0"},
+        ])
+
+    with stub(handler) as client:
+        tier = client.fetch_first_risk_limit_tier("XRP_USDT")
+
+    assert tier.tier == 1
+    assert tier.maintenance_rate == 0.005
+    assert tier.risk_limit == 50_000.0
+    assert tier.deduction == 0.0
+
+
 # ------------------------------------------------------------------ fetch_range
 
 

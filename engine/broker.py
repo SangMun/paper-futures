@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -56,6 +57,23 @@ def round_to_tick(price: float, symbol: str) -> float:
 
     tick = float(CONTRACT_SPECS[symbol]["price_tick"])
     return round(round(price / tick) * tick, 10)
+
+
+def round_up_to_tick(price: float, symbol: str) -> float:
+    """매수/롱 청산처럼 가격 하한을 지킬 때 쓸 호가 단위 올림."""
+
+    tick = float(CONTRACT_SPECS[symbol]["price_tick"])
+    # 부동소수점의 1e-15 오차로 이미 호가인 가격을 한 틱 더 올리지 않는다.
+    ticks = math.ceil(price / tick - 1e-12)
+    return round(ticks * tick, 10)
+
+
+def round_down_to_tick(price: float, symbol: str) -> float:
+    """매도/숏 청산처럼 가격 상한을 지킬 때 쓸 호가 단위 내림."""
+
+    tick = float(CONTRACT_SPECS[symbol]["price_tick"])
+    ticks = math.floor(price / tick + 1e-12)
+    return round(ticks * tick, 10)
 
 
 def fee_for(notional: float, is_maker: bool, fees: FeeAssumption = FEES) -> float:

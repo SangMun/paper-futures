@@ -45,6 +45,40 @@ class FeeAssumption:
 FEES = FeeAssumption()
 
 
+@dataclass(frozen=True)
+class DualHedgeConfig:
+    """EXP-015 XRP 양방향 격리 실험의 고정 가정.
+
+    활성 전략 설정이 아니다. ``tools.replay_xrp_dual_hedge``만 이 값을 읽고,
+    레버리지 등 비교 변수는 명령행에서 명시적으로 덮어쓴다.
+    """
+
+    symbol: str = "XRP_USDT"
+    leverage: int = 50
+    # 한 pair에 배정하는 격리증거금의 합계. 롱/숏이 절반씩 쓴다.
+    pair_margin_fraction: float = 0.02
+    # 이익 보장가 위에 남기는 최소 페어 순익. 0이면 비용 손익분기다.
+    profit_buffer: float = 0.0
+    # 이익 보장가가 활성화된 뒤의 ATR 트레일 폭.
+    trail_atr_mult: float = 1.5
+    atr_period: int = 14
+    # 한 pair가 끝난 뒤 다음 관측 봉 시가에서 새 pair를 낸다.
+    reentry_delay_bars: int = 1
+    # 한쪽 청산 뒤 이익 보장가에 닿지 못한 생존 다리를 무한 보유하지 않는다.
+    # 기본 24시간은 첫 기준선일 뿐, 고정 최적값으로 해석하지 않는다.
+    max_survivor_hold_seconds: int = 24 * 60 * 60
+    # EXP-015 진입 후보 ③: 확정봉 기준 변동성 축소 뒤 범위 이탈.
+    squeeze_breakout_lookback_bars: int = 20
+    squeeze_percentile: float = 20.0
+    squeeze_lookback_bars: int = 100
+    # 청산가보다 이 비율만큼 진입가 쪽에 보호 스탑을 둔다(0.001 = 청산가의 0.1%).
+    # None이면 청산까지 보유한다. 리플레이 비교 변수이며 실시간 기본값은 아직 None이다.
+    liquidation_stop_buffer: float | None = None
+
+
+DUAL_HEDGE = DualHedgeConfig()
+
+
 # 계약 스펙. 2026-08-05 /futures/usdt/contracts 응답으로 확인.
 #
 # maintenance_rate는 청산가 계산에 들어간다. 이 값이 없으면 청산 거리를
@@ -529,6 +563,11 @@ DISCORD_TRADE_WEBHOOK_ENV = "DISCORD_TRADE_WEBHOOK_URL"
 DISCORD_BTC_TRADE_WEBHOOK_ENV = "DISCORD_BTC_TRADE_WEBHOOK_URL"
 DISCORD_XRP_TRADE_WEBHOOK_ENV = "DISCORD_XRP_TRADE_WEBHOOK_URL"
 DISCORD_BALANCE_WEBHOOK_ENV = "DISCORD_BALANCE_WEBHOOK_URL"
+# EXP-015 네 후보는 각각 독립 페이퍼 계좌·알림 채널을 쓴다. URL 자체는 .env에만 둔다.
+DISCORD_XRP_DUAL_HEDGE_50_CONTINUOUS_WEBHOOK_ENV = "DISCORD_XRP_DUAL_HEDGE_50_CONTINUOUS_WEBHOOK_URL"
+DISCORD_XRP_DUAL_HEDGE_50_SQUEEZE_WEBHOOK_ENV = "DISCORD_XRP_DUAL_HEDGE_50_SQUEEZE_WEBHOOK_URL"
+DISCORD_XRP_DUAL_HEDGE_100_CONTINUOUS_WEBHOOK_ENV = "DISCORD_XRP_DUAL_HEDGE_100_CONTINUOUS_WEBHOOK_URL"
+DISCORD_XRP_DUAL_HEDGE_100_SQUEEZE_WEBHOOK_ENV = "DISCORD_XRP_DUAL_HEDGE_100_SQUEEZE_WEBHOOK_URL"
 
 
 # ---------------------------------------------------------------- 진입 체결
