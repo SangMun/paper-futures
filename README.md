@@ -675,6 +675,13 @@ sudo systemctl list-timers 'paper-futures-backup-*'
 
 ## 라이선스
 
-회귀채널 계산은 사용자 제공 "Gaussian Channel Strategy [불스토리]" (© bullstory1)를
-참고했으며 해당 부분은 MPL-2.0을 따른다. 현재 저장소에는 전체 프로젝트에 적용되는
-`LICENSE` 파일이 없으므로 그 밖의 코드에 대한 재사용 조건은 아직 명시되지 않았다.
+**All rights reserved.** 이 저장소는 포트폴리오 열람 목적으로 공개한다. 별도 허락 없이
+코드를 복제·수정·재배포하거나 다른 프로젝트·실거래에 사용할 수 없다.
+
+예외로 아래 두 파일은 원작 조건에 따라 [MPL-2.0](https://mozilla.org/MPL/2.0/)을 따른다.
+회귀채널 계산은 "Gaussian Channel Strategy [불스토리]" (© bullstory1)를 참고했다.
+
+- `indicators/regression_channel.py`
+- `strategies/btc_regression_channel.py`
+
+이 코드는 페이퍼 트레이딩 검증용이며, 투자 권유나 수익 보장이 아니다.
