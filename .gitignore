@@ -30,3 +30,6 @@ dashboard/build/
 dashboard/out/
 dashboard/coverage/
 dashboard/*.tsbuildinfo
+
+# 개인 Codex 설정
+.codex/
