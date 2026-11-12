@@ -16,7 +16,7 @@ cd "$ROOT"
 
 export AWS_PROFILE="${AWS_PROFILE:-paper-bot-owner}"
 export AWS_REGION="${AWS_REGION:-ap-northeast-2}"
-BUCKET="${BACKUP_BUCKET:-<backup-bucket>}"
+BUCKET="${BACKUP_BUCKET:?BACKUP_BUCKET 환경변수에 백업 버킷 이름을 지정}"
 
 if ! aws sts get-caller-identity >/dev/null 2>&1; then
   echo "AWS 자격증명이 없거나 만료됐다 (프로파일: $AWS_PROFILE)" >&2

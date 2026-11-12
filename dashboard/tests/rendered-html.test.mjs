@@ -66,7 +66,8 @@ test("ships every requested timeframe and strategy-specific controls", async () 
   }
   assert.equal(snapshot.strategy.channelLength, 100);
   assert.equal(snapshot.strategy.channelWidthMult, 2);
-  assert.equal(snapshot.strategy.entryOffsetPct, 0.02);
+  // 실시간 봇 설정(engine/loop.py)의 1% 이격을 스냅샷이 그대로 싣는다.
+  assert.equal(snapshot.strategy.entryOffsetPct, 0.01);
   assert.equal(snapshot.strategy.executionTimeframe, "1h");
   assert.equal(snapshot.strategy.contextTimeframe, "4h");
 
@@ -79,7 +80,8 @@ test("ships every requested timeframe and strategy-specific controls", async () 
   assert.match(source, /진입 조건에는 미반영/);
   assert.match(source, /BTC 회귀채널 포지션/);
   assert.match(source, /가격 수익률/);
-  assert.match(source, /onWheel=\{handleWheel\}/);
+  // React onWheel은 passive라 preventDefault가 안 돼 네이티브 리스너로 바꿨다.
+  assert.match(source, /addEventListener\("wheel", onWheel, \{ passive: false \}\)/);
   assert.match(source, /onPointerDown=\{handlePointerDown\}/);
   assert.match(source, /화면 확대/);
   assert.match(source, /과거 \+800/);

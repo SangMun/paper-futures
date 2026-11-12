@@ -4,16 +4,15 @@
 # refresh_from_s3.sh 와 같은 일을 하지만 S3(하루 1회 백업)가 아니라 서버의
 # 현재 파일을 받는다. AWS 자격증명 없이 ssh 키만 있으면 된다.
 #
-#   dashboard/scripts/refresh_from_server.sh
-#   SSH_KEY=~/.ssh/other.pem dashboard/scripts/refresh_from_server.sh
+#   BOT_HOST=ubuntu@<서버> SSH_KEY=~/.ssh/key.pem dashboard/scripts/refresh_from_server.sh
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-HOST="${BOT_HOST:-ubuntu@<server-ip>}"
-SSH_KEY="${SSH_KEY:-$HOME/Downloads/LightsailDefaultKey-ap-northeast-2.pem}"
+HOST="${BOT_HOST:?BOT_HOST=ubuntu@<서버 주소> 지정}"
+SSH_KEY="${SSH_KEY:?SSH_KEY=<키 경로> 지정}"
 REMOTE="${BOT_ROOT:-/home/ubuntu/paper-futures/v2}/data/"
 
 mkdir -p data
