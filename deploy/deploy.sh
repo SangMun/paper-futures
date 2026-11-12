@@ -5,7 +5,7 @@
 # 허용해야 한다. 그래서 서버가 GitHub에서 직접 당겨온다. 인바운드 포트가 필요 없다.
 #
 #   1. origin/$BRANCH를 fetch. 새 커밋이 없으면 종료
-#   2. 매매 계좌(data/*/state.json)에 열린 포지션이 있으면 다음 주기로 미룸
+#   2. 매매 계좌(data/*/state.json)에 열린 포지션이 있으면 미룸 (최대 6시간, 이후 강제)
 #   3. 새 커밋으로 checkout, requirements가 바뀌었으면 pip install
 #   4. pytest 실패 → 이전 커밋으로 복귀하고 경고 (서비스는 재시작하지 않음)
 #   5. 서비스 재시작 → 하나라도 active가 아니면 이전 커밋으로 롤백
@@ -26,6 +26,8 @@ LOCK_FILE="${LOCK_FILE:-/tmp/paper-futures-deploy.lock}"
 SETTLE_SECONDS="${SETTLE_SECONDS:-15}"
 # 실패한 커밋을 기록해 같은 커밋으로 5분마다 재시도·재시작하지 않는다. 새 커밋이 오면 다시 시도한다.
 FAILED_FILE="$REPO_DIR/data/.deploy-failed"
+PENDING_FILE="$REPO_DIR/data/.deploy-pending"
+MAX_DEFER_SECONDS="${MAX_DEFER_SECONDS:-21600}"  # 6시간
 
 exec 9>"$LOCK_FILE"
 if command -v flock >/dev/null; then
@@ -76,10 +78,26 @@ for p in pathlib.Path(sys.argv[1], "data").glob("*/state.json"):
 print(n)
 PY
 )"
+# 계속 포지션을 드는 계좌가 있으면 보류만 하다가 배포가 굶는다. 같은 커밋을
+# MAX_DEFER_SECONDS 넘게 기다렸으면 보유 중이라도 배포한다. 매매 봇은 SIGINT로
+# 상태를 저장하고, 재시작 뒤 놓친 구간은 봉 전체 고저로 손절·익절을 판정한다
+# (engine/state.py last_tick_* — 보수적인 쪽).
+forced=""
 if [[ "$open_positions" != "0" ]]; then
-    echo "열린 포지션 ${open_positions}개, 배포 보류: ${new:0:7}"
-    exit 0
+    now_ts="$(date +%s)"
+    read -r pend_sha pend_ts 2>/dev/null < "$PENDING_FILE" || true
+    if [[ "${pend_sha:-}" != "$new" ]]; then
+        as_user sh -c "echo '$new $now_ts' > '$PENDING_FILE'"
+        notify "⏸ 배포 대기 ${new:0:7}: 열린 포지션 ${open_positions}개 (최대 $((MAX_DEFER_SECONDS / 3600))시간 대기)"
+        exit 0
+    fi
+    if (( now_ts - pend_ts < MAX_DEFER_SECONDS )); then
+        echo "열린 포지션 ${open_positions}개, 배포 보류: ${new:0:7}"
+        exit 0
+    fi
+    forced=" · 포지션 ${open_positions}개 보유 중 강제 배포"
 fi
+rm -f "$PENDING_FILE"
 
 short_old="${old:0:7}"; short_new="${new:0:7}"
 req_changed="$(g diff --name-only "$old" "$new" -- requirements.txt)"
@@ -112,7 +130,7 @@ restart_all() {
 }
 
 if failed="$(restart_all)"; then
-    notify "🚀 배포 완료 ${short_old} → ${short_new} ($(g log -1 --format=%s "$new"))"
+    notify "🚀 배포 완료 ${short_old} → ${short_new} ($(g log -1 --format=%s "$new"))${forced}"
 else
     g reset -q --hard "$old"
     [[ -n "$req_changed" ]] && as_user "$VENV_PY" -m pip install -q -r "$REPO_DIR/requirements.txt"
