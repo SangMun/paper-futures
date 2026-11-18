@@ -77,9 +77,13 @@ class Engine:
     # 과거 리플레이에서 시장가 신호를 신호봉 종가에 체결하면, 봉이 닫힌 뒤에야
     # 알 수 있는 종가를 정확히 잡는 낙관 편향이 생긴다. 실시간 근사 모드에서는
     # 신호를 잠시 보관했다가 다음 가장 짧은 봉의 시가로 체결한다.
-    # 실시간 엔진 기본값은 False다. 실제 루프는 봉 마감 직후 현재가로 체결하며,
-    # 리플레이만 이 옵션을 켜 과거에 실제로 주문 가능했던 첫 가격을 사용한다.
+    # 실시간 엔진 기본값은 False다. 리플레이만 이 옵션을 켜 과거에 실제로
+    # 주문 가능했던 첫 가격을 사용한다.
     defer_market_entries: bool = False
+    # 실시간 루프는 시장가 신호를 **주문 시점 현재가**(진행 중인 드라이버 봉의
+    # 최근 체결가)로 체결한다. 신호봉 종가는 이미 지나간 가격이라 쓰지 않는다.
+    # 현재가를 못 받으면(수집 실패·시세 지연) 진입하지 않는다. main()만 켠다.
+    live_market_price: bool = False
     pending_market_signals: list = field(default_factory=list)
 
     # 지정가 체결률. XRP 전략이 메이커 체결을 전제로 설계돼 있어
@@ -107,6 +111,7 @@ class Engine:
     # 다음 시가 체결 중인 신호가 만들어진 봉. 새 포지션이 그 과거 봉을 다시
     # 청산 판정에 사용하지 않도록 _open()에 전달하는 임시 문맥이다.
     _deferred_signal_bar_ts: int | None = None
+    _live_entry_ts: int | None = None
 
     def __post_init__(self):
         self.bot_state = self.bot_state or st.load()
@@ -1062,6 +1067,17 @@ class Engine:
 
         signal = self._as_maker_entry(signal)
 
+        self._live_entry_ts = None
+        if self.live_market_price and allow_market_defer and signal.order_type == "market":
+            now = int(time.time())
+            snap = self._live_snapshot(spec, spec.driver_tf, now)
+            if snap is None:
+                self._skip(signal, spec, "no_live_price")
+                return
+            signal = _reprice(signal, snap[0].last)
+            # 진입 기록 시각도 신호봉 시작이 아니라 실제 주문 시각으로 남긴다.
+            self._live_entry_ts = int(snap[0].observed_ts)
+
         if (
             allow_market_defer
             and self.defer_market_entries
@@ -1246,7 +1262,7 @@ class Engine:
         self.bot_state.balance = self.broker.balance
 
         self.trade_log.write(
-            market_ts=bar_ts,
+            market_ts=self._live_entry_ts or bar_ts,
             strategy=signal.strategy,
             symbol=spec.contract,
             side=signal.side,
@@ -1351,19 +1367,7 @@ class Engine:
                 continue
 
             self.pending_market_signals.remove(item)
-            original = item["signal"]
-            policy = original.position_policy
-            changes = {"entry": open_price}
-            direction = 1.0 if original.side == "long" else -1.0
-            if policy.stop_pct_from_entry is not None:
-                changes["stop_hint"] = open_price * (
-                    1.0 - direction * float(policy.stop_pct_from_entry)
-                )
-            if policy.target_pct_from_entry is not None:
-                changes["target_hint"] = open_price * (
-                    1.0 + direction * float(policy.target_pct_from_entry)
-                )
-            signal = replace(original, **changes)
+            signal = _reprice(item["signal"], open_price)
             self._deferred_signal_bar_ts = int(item["signal_bar_ts"])
             try:
                 self._consider(
@@ -1740,6 +1744,24 @@ class Engine:
         self.notifier.close()
 
 
+def _reprice(signal, price: float):
+    """시장가 신호를 실제 주문 가능 가격으로 옮긴다.
+
+    고정 % 손절·목표 전략만 새 진입가에서 다시 계산하고, 구조적 손절(패턴
+    무효화 지점)을 쓰는 전략은 그대로 둔다. 갭 때문에 구조가 깨졌으면
+    청산 계획 단계에서 거절된다.
+    """
+
+    policy = signal.position_policy
+    changes = {"entry": price}
+    direction = 1.0 if signal.side == "long" else -1.0
+    if policy.stop_pct_from_entry is not None:
+        changes["stop_hint"] = price * (1.0 - direction * float(policy.stop_pct_from_entry))
+    if policy.target_pct_from_entry is not None:
+        changes["target_hint"] = price * (1.0 + direction * float(policy.target_pct_from_entry))
+    return replace(signal, **changes)
+
+
 def _strategy_named(engine, spec: SymbolSpec, name: str):
     """이름으로 전략 인스턴스를 찾는다. 진입봉을 알아내는 데 쓴다."""
 
@@ -1988,7 +2010,7 @@ def main() -> int:
     strategies = select_strategies(
         build_strategies(), os.environ.get("PAPER_STRATEGIES", "")
     )
-    engine = Engine(strategies=strategies)
+    engine = Engine(strategies=strategies, live_market_price=True)
     tags = [s.name for group in engine.strategies.values() for s in group]
     label = f" [{account}]" if account else ""
 

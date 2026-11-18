@@ -283,3 +283,44 @@ def test_체결_직후_손절이_닿으면_다음_틱이_잡는다(tmp_path):
     e.run_tick(now_ts=live_now(client, 120))
 
     assert e.bot_state.positions == []
+
+
+# ------------------------------------------------------------------ 실시간 시장가 = 주문 시점 현재가
+
+
+def _market_signal(entry=1.0):
+    return Signal(strategy="xrp_patterns.test", symbol=XRP, side="long", entry=entry, stop_hint=0.97,
+                  target_hint=1.06, context={"atr": 0.01})
+
+
+def test_실시간_시장가는_신호봉_종가가_아니라_현재가로_체결(tmp_path, monkeypatch):
+    client = TickClient()
+    e = make_engine(tmp_path, client)
+    e.live_market_price = True
+    spec = next(s for s in e.symbols if s.contract == XRP)
+    e.strategies = {XRP: [FakeStrategy("xrp_patterns.test")]}
+    client.set_live(1.0, 1.006, 0.999, 1.004)          # 지금 체결가 1.004
+    now = live_now(client)
+    monkeypatch.setattr(loop_mod.time, "time", lambda: now)
+
+    e._consider(spec, _market_signal(entry=1.0), bar_ts=int(client.closed[-1]["t"]))
+
+    assert len(e.bot_state.positions) == 1
+    slip = settings.FEES.slippage_rate
+    assert e.bot_state.positions[0].entry == pytest.approx(1.004 * (1 + slip), rel=1e-4)
+    rows = (tmp_path / "t.csv").read_text().splitlines()
+    assert rows[-1].startswith(f"{now},")               # 기록 시각도 주문 시각
+
+
+def test_현재가를_못_받으면_진입하지_않는다(tmp_path, monkeypatch):
+    client = TickClient()                                # 진행 중인 봉 없음
+    e = make_engine(tmp_path, client)
+    e.live_market_price = True
+    spec = next(s for s in e.symbols if s.contract == XRP)
+    e.strategies = {XRP: [FakeStrategy("xrp_patterns.test")]}
+    now = int(client.closed[-1]["t"]) + STEP + 60
+    monkeypatch.setattr(loop_mod.time, "time", lambda: now)
+
+    e._consider(spec, _market_signal(), bar_ts=int(client.closed[-1]["t"]))
+
+    assert e.bot_state.positions == []
